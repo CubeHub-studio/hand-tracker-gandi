@@ -1,6 +1,7 @@
 class HandTrackingExtension {
     constructor() {
         this.video = document.createElement("video");
+
         this.video.autoplay = true;
         this.video.playsInline = true;
         this.video.muted = true;
@@ -17,8 +18,9 @@ class HandTrackingExtension {
 
         this.stream = null;
         this.handLandmarker = null;
-        this.running = false;
         this.loadingPromise = null;
+
+        this.running = false;
         this.lastResults = null;
         this.lastVideoTime = -1;
     }
@@ -38,10 +40,8 @@ class HandTrackingExtension {
                     "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/vision_bundle.mjs"
                 );
 
-                const {
-                    HandLandmarker,
-                    FilesetResolver
-                } = vision;
+                const HandLandmarker = vision.HandLandmarker;
+                const FilesetResolver = vision.FilesetResolver;
 
                 const filesetResolver =
                     await FilesetResolver.forVisionTasks(
@@ -55,6 +55,7 @@ class HandTrackingExtension {
                             baseOptions: {
                                 modelAssetPath:
                                     "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
+
                                 delegate: "GPU"
                             },
 
@@ -69,9 +70,15 @@ class HandTrackingExtension {
                     );
 
                 return this.handLandmarker;
+
             } catch (error) {
                 this.loadingPromise = null;
-                console.error("MediaPipe loading error:", error);
+
+                console.error(
+                    "Hand Tracking: MediaPipe failed to load",
+                    error
+                );
+
                 throw error;
             }
         })();
@@ -79,32 +86,40 @@ class HandTrackingExtension {
         return this.loadingPromise;
     }
 
-    async startCamera() {
+    async openCamera() {
         if (this.running) {
             return;
         }
 
         try {
+            if (!navigator.mediaDevices ||
+                !navigator.mediaDevices.getUserMedia) {
+
+                throw new Error(
+                    "Camera access is not supported by this browser."
+                );
+            }
+
             /*
-             * Request the camera FIRST.
-             *
-             * This is intentionally done directly from the block's
-             * action so the browser can associate the permission
-             * request with the user's interaction.
+             * Get camera permission FIRST.
              */
             if (!this.stream) {
-                this.stream = await navigator.mediaDevices.getUserMedia({
-                    video: {
-                        width: {
-                            ideal: 640
+                this.stream =
+                    await navigator.mediaDevices.getUserMedia({
+                        video: {
+                            width: {
+                                ideal: 640
+                            },
+
+                            height: {
+                                ideal: 480
+                            },
+
+                            facingMode: "user"
                         },
-                        height: {
-                            ideal: 480
-                        },
-                        facingMode: "user"
-                    },
-                    audio: false
-                });
+
+                        audio: false
+                    });
 
                 this.video.srcObject = this.stream;
 
@@ -112,7 +127,7 @@ class HandTrackingExtension {
             }
 
             /*
-             * Load MediaPipe after the camera is active.
+             * Load MediaPipe after the camera starts.
              */
             await this.loadMediaPipe();
 
@@ -122,7 +137,10 @@ class HandTrackingExtension {
             this.processFrame();
 
         } catch (error) {
-            console.error("Hand tracking start error:", error);
+            console.error(
+                "Hand Tracking: could not start",
+                error
+            );
 
             this.running = false;
 
@@ -132,8 +150,9 @@ class HandTrackingExtension {
                 }
 
                 this.stream = null;
-                this.video.srcObject = null;
             }
+
+            this.video.srcObject = null;
 
             throw error;
         }
@@ -146,11 +165,11 @@ class HandTrackingExtension {
             for (const track of this.stream.getTracks()) {
                 track.stop();
             }
-
-            this.stream = null;
         }
 
+        this.stream = null;
         this.video.srcObject = null;
+
         this.lastResults = null;
         this.lastVideoTime = -1;
     }
@@ -163,13 +182,14 @@ class HandTrackingExtension {
         if (
             this.handLandmarker &&
             this.video.readyState >= 2 &&
-            this.video.videoWidth > 0
+            this.video.videoWidth > 0 &&
+            this.video.videoHeight > 0
         ) {
             try {
-                const currentTime = this.video.currentTime;
+                const videoTime = this.video.currentTime;
 
-                if (currentTime !== this.lastVideoTime) {
-                    this.lastVideoTime = currentTime;
+                if (videoTime !== this.lastVideoTime) {
+                    this.lastVideoTime = videoTime;
 
                     this.lastResults =
                         this.handLandmarker.detectForVideo(
@@ -177,12 +197,18 @@ class HandTrackingExtension {
                             performance.now()
                         );
                 }
+
             } catch (error) {
-                console.error("Hand detection error:", error);
+                console.error(
+                    "Hand Tracking: detection error",
+                    error
+                );
             }
         }
 
-        requestAnimationFrame(() => this.processFrame());
+        requestAnimationFrame(
+            () => this.processFrame()
+        );
     }
 
     cameraActive() {
@@ -206,28 +232,29 @@ class HandTrackingExtension {
             return -1;
         }
 
-        if (
-            !this.lastResults.handednesses ||
-            !this.lastResults.handednesses.length
-        ) {
+        if (!this.lastResults.handednesses) {
             return -1;
         }
 
-        const wanted = String(hand).toLowerCase();
+        const wanted =
+            String(hand || "").toLowerCase();
 
         for (
             let i = 0;
             i < this.lastResults.handednesses.length;
             i++
         ) {
-            const handedness = this.lastResults.handednesses[i];
+            const handedness =
+                this.lastResults.handednesses[i];
 
-            if (!handedness || !handedness.length) {
+            if (!handedness || handedness.length === 0) {
                 continue;
             }
 
             const label =
-                String(handedness[0].categoryName).toLowerCase();
+                String(
+                    handedness[0].categoryName
+                ).toLowerCase();
 
             if (label === wanted) {
                 return i;
@@ -237,39 +264,39 @@ class HandTrackingExtension {
         return -1;
     }
 
-    handDetected(hand) {
-        return this.getHandIndex(hand) !== -1;
+    handDetected(args) {
+        return this.getHandIndex(args.HAND) !== -1;
     }
 
     getLandmark(hand, index) {
-        const handIndex = this.getHandIndex(hand);
+        const handIndex =
+            this.getHandIndex(hand);
 
         if (handIndex === -1) {
             return null;
         }
 
-        if (!this.lastResults || !this.lastResults.landmarks) {
+        if (!this.lastResults) {
             return null;
         }
 
-        const handLandmarks =
+        if (!this.lastResults.landmarks) {
+            return null;
+        }
+
+        const landmarks =
             this.lastResults.landmarks[handIndex];
 
-        if (!handLandmarks) {
+        if (!landmarks) {
             return null;
         }
 
-        const landmark = handLandmarks[index];
-
-        if (!landmark) {
-            return null;
-        }
-
-        return landmark;
+        return landmarks[index] || null;
     }
 
     getX(hand, index) {
-        const landmark = this.getLandmark(hand, index);
+        const landmark =
+            this.getLandmark(hand, index);
 
         if (!landmark) {
             return 0;
@@ -279,7 +306,8 @@ class HandTrackingExtension {
     }
 
     getY(hand, index) {
-        const landmark = this.getLandmark(hand, index);
+        const landmark =
+            this.getLandmark(hand, index);
 
         if (!landmark) {
             return 0;
@@ -289,7 +317,8 @@ class HandTrackingExtension {
     }
 
     getZ(hand, index) {
-        const landmark = this.getLandmark(hand, index);
+        const landmark =
+            this.getLandmark(hand, index);
 
         if (!landmark) {
             return 0;
@@ -310,18 +339,14 @@ class HandTrackingExtension {
 
             blocks: [
 
-                // ==============================
-                // CAMERA
-                // ==============================
-
                 {
-                    opcode: "startCamera",
+                    opcode: "startHandTracking",
                     blockType: "command",
                     text: "start hand tracking"
                 },
 
                 {
-                    opcode: "stopCamera",
+                    opcode: "stopHandTracking",
                     blockType: "command",
                     text: "stop hand tracking"
                 },
@@ -342,6 +367,7 @@ class HandTrackingExtension {
                     opcode: "handDetected",
                     blockType: "Boolean",
                     text: "[HAND] hand detected?",
+
                     arguments: {
                         HAND: {
                             type: "string",
@@ -350,9 +376,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // WRIST
-                // ==============================
 
                 {
                     opcode: "wristX",
@@ -390,9 +414,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // THUMB BOTTOM
-                // ==============================
 
                 {
                     opcode: "thumbBottomX",
@@ -430,9 +452,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // THUMB MIDDLE
-                // ==============================
 
                 {
                     opcode: "thumbMiddleX",
@@ -470,9 +490,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // THUMB TOP
-                // ==============================
 
                 {
                     opcode: "thumbTopX",
@@ -510,9 +528,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // THUMB TIP
-                // ==============================
 
                 {
                     opcode: "thumbTipX",
@@ -550,9 +566,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // INDEX BOTTOM
-                // ==============================
 
                 {
                     opcode: "indexBottomX",
@@ -590,9 +604,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // INDEX MIDDLE
-                // ==============================
 
                 {
                     opcode: "indexMiddleX",
@@ -630,9 +642,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // INDEX TOP
-                // ==============================
 
                 {
                     opcode: "indexTopX",
@@ -670,9 +680,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // INDEX TIP
-                // ==============================
 
                 {
                     opcode: "indexTipX",
@@ -710,9 +718,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // MIDDLE BOTTOM
-                // ==============================
 
                 {
                     opcode: "middleBottomX",
@@ -750,9 +756,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // MIDDLE MIDDLE
-                // ==============================
 
                 {
                     opcode: "middleMiddleX",
@@ -790,9 +794,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // MIDDLE TOP
-                // ==============================
 
                 {
                     opcode: "middleTopX",
@@ -830,9 +832,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // MIDDLE TIP
-                // ==============================
 
                 {
                     opcode: "middleTipX",
@@ -870,9 +870,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // RING BOTTOM
-                // ==============================
 
                 {
                     opcode: "ringBottomX",
@@ -910,9 +908,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // RING MIDDLE
-                // ==============================
 
                 {
                     opcode: "ringMiddleX",
@@ -950,9 +946,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // RING TOP
-                // ==============================
 
                 {
                     opcode: "ringTopX",
@@ -990,9 +984,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // RING TIP
-                // ==============================
 
                 {
                     opcode: "ringTipX",
@@ -1030,9 +1022,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // PINKY BOTTOM
-                // ==============================
 
                 {
                     opcode: "pinkyBottomX",
@@ -1070,9 +1060,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // PINKY MIDDLE
-                // ==============================
 
                 {
                     opcode: "pinkyMiddleX",
@@ -1110,9 +1098,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // PINKY TOP
-                // ==============================
 
                 {
                     opcode: "pinkyTopX",
@@ -1150,9 +1136,7 @@ class HandTrackingExtension {
                     }
                 },
 
-                // ==============================
                 // PINKY TIP
-                // ==============================
 
                 {
                     opcode: "pinkyTipX",
@@ -1194,11 +1178,13 @@ class HandTrackingExtension {
             menus: {
                 hands: {
                     acceptReporters: true,
+
                     items: [
                         {
                             text: "left",
                             value: "Left"
                         },
+
                         {
                             text: "right",
                             value: "Right"
@@ -1209,21 +1195,17 @@ class HandTrackingExtension {
         };
     }
 
-    // ==============================
-    // CAMERA BLOCKS
-    // ==============================
+    // CAMERA
 
-    async startCamera() {
-        await this.startCamera();
+    async startHandTracking() {
+        await this.openCamera();
     }
 
-    stopCameraBlock() {
+    stopHandTracking() {
         this.stopCamera();
     }
 
-    // ==============================
     // WRIST
-    // ==============================
 
     wristX(args) {
         return this.getX(args.HAND, 0);
@@ -1237,9 +1219,7 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 0);
     }
 
-    // ==============================
     // THUMB
-    // ==============================
 
     thumbBottomX(args) {
         return this.getX(args.HAND, 1);
@@ -1289,9 +1269,7 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 4);
     }
 
-    // ==============================
     // INDEX
-    // ==============================
 
     indexBottomX(args) {
         return this.getX(args.HAND, 5);
@@ -1341,9 +1319,7 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 8);
     }
 
-    // ==============================
     // MIDDLE
-    // ==============================
 
     middleBottomX(args) {
         return this.getX(args.HAND, 9);
@@ -1393,9 +1369,7 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 12);
     }
 
-    // ==============================
     // RING
-    // ==============================
 
     ringBottomX(args) {
         return this.getX(args.HAND, 13);
@@ -1445,9 +1419,7 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 16);
     }
 
-    // ==============================
     // PINKY
-    // ==============================
 
     pinkyBottomX(args) {
         return this.getX(args.HAND, 17);
@@ -1499,62 +1471,13 @@ class HandTrackingExtension {
 }
 
 
-// ============================================================
-// IMPORTANT:
-// The command block cannot have the same name as the internal
-// startCamera() function, so we create wrapper methods here.
-// ============================================================
-
-const extension = new HandTrackingExtension();
-
-extension.startHandTracking = async function () {
-    await HandTrackingExtension.prototype.startCamera.call(this);
-};
-
-extension.stopHandTracking = function () {
-    HandTrackingExtension.prototype.stopCamera.call(this);
-};
-
-extension.isCameraActive = function () {
-    return this.cameraActive();
-};
-
-
-// ============================================================
-// Map the Scratch/Gandi opcodes to the actual functions.
-// ============================================================
-
-extension.getInfo = function () {
-    const info = HandTrackingExtension.prototype.getInfo.call(this);
-
-    info.blocks = info.blocks.map(block => {
-        if (block.opcode === "startCamera") {
-            block.opcode = "startHandTracking";
-        }
-
-        if (block.opcode === "stopCamera") {
-            block.opcode = "stopHandTracking";
-        }
-
-        if (block.opcode === "cameraActive") {
-            block.opcode = "isCameraActive";
-        }
-
-        return block;
-    });
-
-    return info;
-};
-
-
-// ============================================================
-// Register
-// ============================================================
-
 if (!Scratch.extensions.unsandboxed) {
     throw new Error(
-        "The Hand Tracking extension must run unsandboxed."
+        "Hand Tracking must run unsandboxed."
     );
 }
 
-Scratch.extensions.register(extension);
+
+Scratch.extensions.register(
+    new HandTrackingExtension()
+);
