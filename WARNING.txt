@@ -1,0 +1,2 @@
+PLEASE ensure you have atleast 32 gigs of RAM, I am trying to make this take up as little RAM as possible but beware that this extension (older version) has crashed cocrea due to being too RAM hungry.
+- Cubes, Studio
