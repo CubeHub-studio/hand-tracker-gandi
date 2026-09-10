@@ -17,92 +17,172 @@ class HandTrackingExtension {
         document.body.appendChild(this.video);
 
         this.stream = null;
-        this.handLandmarker = null;
-        this.loadingPromise = null;
+        this.hands = null;
 
         this.running = false;
-        this.lastResults = null;
-        this.lastVideoTime = -1;
+        this.loading = false;
+
+        this.results = null;
+
+        this.frameRequest = null;
+        this.lastProcessedTime = -1;
+
+        this.mediaPipeLoaded = false;
+    }
+
+    // =========================================================
+    // LOAD MEDIAPIPE USING SCRIPT TAGS
+    // =========================================================
+
+    loadScript(url) {
+        return new Promise((resolve, reject) => {
+            const existing = document.querySelector(
+                `script[src="${url}"]`
+            );
+
+            if (existing) {
+                if (existing.dataset.loaded === "true") {
+                    resolve();
+                    return;
+                }
+
+                existing.addEventListener("load", () => {
+                    resolve();
+                });
+
+                existing.addEventListener("error", () => {
+                    reject(
+                        new Error(
+                            "Failed to load MediaPipe script: " + url
+                        )
+                    );
+                });
+
+                return;
+            }
+
+            const script = document.createElement("script");
+
+            script.src = url;
+            script.async = true;
+            script.crossOrigin = "anonymous";
+
+            script.onload = () => {
+                script.dataset.loaded = "true";
+                resolve();
+            };
+
+            script.onerror = () => {
+                reject(
+                    new Error(
+                        "Failed to load MediaPipe script: " + url
+                    )
+                );
+            };
+
+            document.head.appendChild(script);
+        });
     }
 
     async loadMediaPipe() {
-        if (this.handLandmarker) {
-            return this.handLandmarker;
+        if (this.mediaPipeLoaded && window.Hands) {
+            return;
         }
 
-        if (this.loadingPromise) {
-            return this.loadingPromise;
-        }
-
-        this.loadingPromise = (async () => {
-            try {
-                const vision = await import(
-                    "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/vision_bundle.mjs"
+        if (this.loading) {
+            while (this.loading) {
+                await new Promise(resolve =>
+                    setTimeout(resolve, 50)
                 );
-
-                const HandLandmarker = vision.HandLandmarker;
-                const FilesetResolver = vision.FilesetResolver;
-
-                const filesetResolver =
-                    await FilesetResolver.forVisionTasks(
-                        "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm"
-                    );
-
-                this.handLandmarker =
-                    await HandLandmarker.createFromOptions(
-                        filesetResolver,
-                        {
-                            baseOptions: {
-                                modelAssetPath:
-                                    "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-
-                                delegate: "GPU"
-                            },
-
-                            runningMode: "VIDEO",
-
-                            numHands: 2,
-
-                            minHandDetectionConfidence: 0.5,
-                            minHandPresenceConfidence: 0.5,
-                            minTrackingConfidence: 0.5
-                        }
-                    );
-
-                return this.handLandmarker;
-
-            } catch (error) {
-                this.loadingPromise = null;
-
-                console.error(
-                    "Hand Tracking: MediaPipe failed to load",
-                    error
-                );
-
-                throw error;
             }
-        })();
 
-        return this.loadingPromise;
+            if (this.mediaPipeLoaded && window.Hands) {
+                return;
+            }
+        }
+
+        this.loading = true;
+
+        try {
+            /*
+             * Classic MediaPipe Hands browser library.
+             *
+             * No ES module.
+             * No dynamic import().
+             */
+            await this.loadScript(
+                "https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"
+            );
+
+            if (!window.Hands) {
+                throw new Error(
+                    "MediaPipe Hands loaded, but the Hands API was not found."
+                );
+            }
+
+            this.hands = new window.Hands({
+                locateFile: file => {
+                    return (
+                        "https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/" +
+                        file
+                    );
+                }
+            });
+
+            this.hands.setOptions({
+                maxNumHands: 2,
+
+                modelComplexity: 1,
+
+                minDetectionConfidence: 0.5,
+
+                minTrackingConfidence: 0.5
+            });
+
+            this.hands.onResults(results => {
+                this.results = results;
+            });
+
+            this.mediaPipeLoaded = true;
+
+        } catch (error) {
+            console.error(
+                "Hand Tracking: MediaPipe failed to load.",
+                error
+            );
+
+            throw error;
+
+        } finally {
+            this.loading = false;
+        }
     }
 
-    async openCamera() {
+    // =========================================================
+    // CAMERA
+    // =========================================================
+
+    async startHandTracking() {
         if (this.running) {
             return;
         }
 
         try {
-            if (!navigator.mediaDevices ||
-                !navigator.mediaDevices.getUserMedia) {
-
+            /*
+             * Ask for the camera first.
+             */
+            if (!navigator.mediaDevices) {
                 throw new Error(
-                    "Camera access is not supported by this browser."
+                    "navigator.mediaDevices is unavailable."
                 );
             }
 
-            /*
-             * Get camera permission FIRST.
-             */
+            if (!navigator.mediaDevices.getUserMedia) {
+                throw new Error(
+                    "getUserMedia is unavailable in this browser."
+                );
+            }
+
             if (!this.stream) {
                 this.stream =
                     await navigator.mediaDevices.getUserMedia({
@@ -127,18 +207,19 @@ class HandTrackingExtension {
             }
 
             /*
-             * Load MediaPipe after the camera starts.
+             * Load MediaPipe after the user starts tracking.
              */
             await this.loadMediaPipe();
 
             this.running = true;
-            this.lastVideoTime = -1;
+
+            this.lastProcessedTime = -1;
 
             this.processFrame();
 
         } catch (error) {
             console.error(
-                "Hand Tracking: could not start",
+                "Hand Tracking could not start:",
                 error
             );
 
@@ -148,9 +229,9 @@ class HandTrackingExtension {
                 for (const track of this.stream.getTracks()) {
                     track.stop();
                 }
-
-                this.stream = null;
             }
+
+            this.stream = null;
 
             this.video.srcObject = null;
 
@@ -158,8 +239,16 @@ class HandTrackingExtension {
         }
     }
 
-    stopCamera() {
+    stopHandTracking() {
         this.running = false;
+
+        if (this.frameRequest !== null) {
+            cancelAnimationFrame(
+                this.frameRequest
+            );
+
+            this.frameRequest = null;
+        }
 
         if (this.stream) {
             for (const track of this.stream.getTracks()) {
@@ -168,11 +257,17 @@ class HandTrackingExtension {
         }
 
         this.stream = null;
+
         this.video.srcObject = null;
 
-        this.lastResults = null;
-        this.lastVideoTime = -1;
+        this.results = null;
+
+        this.lastProcessedTime = -1;
     }
+
+    // =========================================================
+    // FRAME PROCESSING
+    // =========================================================
 
     processFrame() {
         if (!this.running) {
@@ -180,59 +275,67 @@ class HandTrackingExtension {
         }
 
         if (
-            this.handLandmarker &&
+            this.hands &&
             this.video.readyState >= 2 &&
             this.video.videoWidth > 0 &&
             this.video.videoHeight > 0
         ) {
-            try {
-                const videoTime = this.video.currentTime;
+            const currentTime =
+                this.video.currentTime;
 
-                if (videoTime !== this.lastVideoTime) {
-                    this.lastVideoTime = videoTime;
+            /*
+             * Don't process the same video frame twice.
+             */
+            if (
+                currentTime !==
+                this.lastProcessedTime
+            ) {
+                this.lastProcessedTime =
+                    currentTime;
 
-                    this.lastResults =
-                        this.handLandmarker.detectForVideo(
-                            this.video,
-                            performance.now()
-                        );
-                }
-
-            } catch (error) {
-                console.error(
-                    "Hand Tracking: detection error",
-                    error
-                );
+                this.hands.send({
+                    image: this.video
+                }).catch(error => {
+                    console.error(
+                        "MediaPipe frame error:",
+                        error
+                    );
+                });
             }
         }
 
-        requestAnimationFrame(
-            () => this.processFrame()
-        );
+        this.frameRequest =
+            requestAnimationFrame(
+                () => this.processFrame()
+            );
     }
+
+    // =========================================================
+    // GENERAL HAND INFORMATION
+    // =========================================================
 
     cameraActive() {
         return this.running;
     }
 
     getNumberOfHands() {
-        if (!this.lastResults) {
+        if (!this.results) {
             return 0;
         }
 
-        if (!this.lastResults.landmarks) {
+        if (!this.results.multiHandLandmarks) {
             return 0;
         }
 
-        return this.lastResults.landmarks.length;
+        return this.results.multiHandLandmarks.length;
     }
 
     getHandIndex(hand) {
-        if (!this.lastResults) {
+        if (!this.results) {
             return -1;
         }
 
-        if (!this.lastResults.handednesses) {
+        if (!this.results.multiHandedness) {
             return -1;
         }
 
@@ -241,20 +344,32 @@ class HandTrackingExtension {
 
         for (
             let i = 0;
-            i < this.lastResults.handednesses.length;
+            i < this.results.multiHandedness.length;
             i++
         ) {
-            const handedness =
-                this.lastResults.handednesses[i];
+            const detected =
+                this.results.multiHandedness[i];
 
-            if (!handedness || handedness.length === 0) {
+            if (!detected) {
                 continue;
             }
 
-            const label =
-                String(
-                    handedness[0].categoryName
-                ).toLowerCase();
+            let label = "";
+
+            if (detected.label) {
+                label =
+                    String(
+                        detected.label
+                    ).toLowerCase();
+            } else if (
+                detected.classification &&
+                detected.classification.length > 0
+            ) {
+                label =
+                    String(
+                        detected.classification[0].label
+                    ).toLowerCase();
+            }
 
             if (label === wanted) {
                 return i;
@@ -265,10 +380,26 @@ class HandTrackingExtension {
     }
 
     handDetected(args) {
-        return this.getHandIndex(args.HAND) !== -1;
+        return (
+            this.getHandIndex(
+                args.HAND
+            ) !== -1
+        );
     }
 
+    // =========================================================
+    // LANDMARK ACCESS
+    // =========================================================
+
     getLandmark(hand, index) {
+        if (!this.results) {
+            return null;
+        }
+
+        if (!this.results.multiHandLandmarks) {
+            return null;
+        }
+
         const handIndex =
             this.getHandIndex(hand);
 
@@ -276,27 +407,28 @@ class HandTrackingExtension {
             return null;
         }
 
-        if (!this.lastResults) {
-            return null;
-        }
-
-        if (!this.lastResults.landmarks) {
-            return null;
-        }
-
         const landmarks =
-            this.lastResults.landmarks[handIndex];
+            this.results.multiHandLandmarks[
+                handIndex
+            ];
 
         if (!landmarks) {
             return null;
         }
 
-        return landmarks[index] || null;
+        if (!landmarks[index]) {
+            return null;
+        }
+
+        return landmarks[index];
     }
 
     getX(hand, index) {
         const landmark =
-            this.getLandmark(hand, index);
+            this.getLandmark(
+                hand,
+                index
+            );
 
         if (!landmark) {
             return 0;
@@ -307,7 +439,10 @@ class HandTrackingExtension {
 
     getY(hand, index) {
         const landmark =
-            this.getLandmark(hand, index);
+            this.getLandmark(
+                hand,
+                index
+            );
 
         if (!landmark) {
             return 0;
@@ -318,7 +453,10 @@ class HandTrackingExtension {
 
     getZ(hand, index) {
         const landmark =
-            this.getLandmark(hand, index);
+            this.getLandmark(
+                hand,
+                index
+            );
 
         if (!landmark) {
             return 0;
@@ -327,885 +465,9 @@ class HandTrackingExtension {
         return landmark.z;
     }
 
-    getInfo() {
-        return {
-            id: "handtracking",
-
-            name: "Hand Tracking",
-
-            color1: "#5B5BFF",
-            color2: "#4747CC",
-            color3: "#333399",
-
-            blocks: [
-
-                {
-                    opcode: "startHandTracking",
-                    blockType: "command",
-                    text: "start hand tracking"
-                },
-
-                {
-                    opcode: "stopHandTracking",
-                    blockType: "command",
-                    text: "stop hand tracking"
-                },
-
-                {
-                    opcode: "cameraActive",
-                    blockType: "Boolean",
-                    text: "camera active?"
-                },
-
-                {
-                    opcode: "getNumberOfHands",
-                    blockType: "reporter",
-                    text: "number of hands"
-                },
-
-                {
-                    opcode: "handDetected",
-                    blockType: "Boolean",
-                    text: "[HAND] hand detected?",
-
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // WRIST
-
-                {
-                    opcode: "wristX",
-                    blockType: "reporter",
-                    text: "[HAND] wrist x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "wristY",
-                    blockType: "reporter",
-                    text: "[HAND] wrist y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "wristZ",
-                    blockType: "reporter",
-                    text: "[HAND] wrist z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // THUMB BOTTOM
-
-                {
-                    opcode: "thumbBottomX",
-                    blockType: "reporter",
-                    text: "[HAND] thumb bottom joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "thumbBottomY",
-                    blockType: "reporter",
-                    text: "[HAND] thumb bottom joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "thumbBottomZ",
-                    blockType: "reporter",
-                    text: "[HAND] thumb bottom joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // THUMB MIDDLE
-
-                {
-                    opcode: "thumbMiddleX",
-                    blockType: "reporter",
-                    text: "[HAND] thumb middle joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "thumbMiddleY",
-                    blockType: "reporter",
-                    text: "[HAND] thumb middle joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "thumbMiddleZ",
-                    blockType: "reporter",
-                    text: "[HAND] thumb middle joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // THUMB TOP
-
-                {
-                    opcode: "thumbTopX",
-                    blockType: "reporter",
-                    text: "[HAND] thumb top joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "thumbTopY",
-                    blockType: "reporter",
-                    text: "[HAND] thumb top joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "thumbTopZ",
-                    blockType: "reporter",
-                    text: "[HAND] thumb top joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // THUMB TIP
-
-                {
-                    opcode: "thumbTipX",
-                    blockType: "reporter",
-                    text: "[HAND] thumb tip x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "thumbTipY",
-                    blockType: "reporter",
-                    text: "[HAND] thumb tip y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "thumbTipZ",
-                    blockType: "reporter",
-                    text: "[HAND] thumb tip z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // INDEX BOTTOM
-
-                {
-                    opcode: "indexBottomX",
-                    blockType: "reporter",
-                    text: "[HAND] index bottom joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "indexBottomY",
-                    blockType: "reporter",
-                    text: "[HAND] index bottom joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "indexBottomZ",
-                    blockType: "reporter",
-                    text: "[HAND] index bottom joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // INDEX MIDDLE
-
-                {
-                    opcode: "indexMiddleX",
-                    blockType: "reporter",
-                    text: "[HAND] index middle joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "indexMiddleY",
-                    blockType: "reporter",
-                    text: "[HAND] index middle joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "indexMiddleZ",
-                    blockType: "reporter",
-                    text: "[HAND] index middle joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // INDEX TOP
-
-                {
-                    opcode: "indexTopX",
-                    blockType: "reporter",
-                    text: "[HAND] index top joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "indexTopY",
-                    blockType: "reporter",
-                    text: "[HAND] index top joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "indexTopZ",
-                    blockType: "reporter",
-                    text: "[HAND] index top joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // INDEX TIP
-
-                {
-                    opcode: "indexTipX",
-                    blockType: "reporter",
-                    text: "[HAND] index tip x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "indexTipY",
-                    blockType: "reporter",
-                    text: "[HAND] index tip y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "indexTipZ",
-                    blockType: "reporter",
-                    text: "[HAND] index tip z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // MIDDLE BOTTOM
-
-                {
-                    opcode: "middleBottomX",
-                    blockType: "reporter",
-                    text: "[HAND] middle bottom joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "middleBottomY",
-                    blockType: "reporter",
-                    text: "[HAND] middle bottom joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "middleBottomZ",
-                    blockType: "reporter",
-                    text: "[HAND] middle bottom joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // MIDDLE MIDDLE
-
-                {
-                    opcode: "middleMiddleX",
-                    blockType: "reporter",
-                    text: "[HAND] middle middle joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "middleMiddleY",
-                    blockType: "reporter",
-                    text: "[HAND] middle middle joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "middleMiddleZ",
-                    blockType: "reporter",
-                    text: "[HAND] middle middle joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // MIDDLE TOP
-
-                {
-                    opcode: "middleTopX",
-                    blockType: "reporter",
-                    text: "[HAND] middle top joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "middleTopY",
-                    blockType: "reporter",
-                    text: "[HAND] middle top joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "middleTopZ",
-                    blockType: "reporter",
-                    text: "[HAND] middle top joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // MIDDLE TIP
-
-                {
-                    opcode: "middleTipX",
-                    blockType: "reporter",
-                    text: "[HAND] middle tip x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "middleTipY",
-                    blockType: "reporter",
-                    text: "[HAND] middle tip y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "middleTipZ",
-                    blockType: "reporter",
-                    text: "[HAND] middle tip z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // RING BOTTOM
-
-                {
-                    opcode: "ringBottomX",
-                    blockType: "reporter",
-                    text: "[HAND] ring bottom joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "ringBottomY",
-                    blockType: "reporter",
-                    text: "[HAND] ring bottom joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "ringBottomZ",
-                    blockType: "reporter",
-                    text: "[HAND] ring bottom joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // RING MIDDLE
-
-                {
-                    opcode: "ringMiddleX",
-                    blockType: "reporter",
-                    text: "[HAND] ring middle joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "ringMiddleY",
-                    blockType: "reporter",
-                    text: "[HAND] ring middle joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "ringMiddleZ",
-                    blockType: "reporter",
-                    text: "[HAND] ring middle joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // RING TOP
-
-                {
-                    opcode: "ringTopX",
-                    blockType: "reporter",
-                    text: "[HAND] ring top joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "ringTopY",
-                    blockType: "reporter",
-                    text: "[HAND] ring top joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "ringTopZ",
-                    blockType: "reporter",
-                    text: "[HAND] ring top joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // RING TIP
-
-                {
-                    opcode: "ringTipX",
-                    blockType: "reporter",
-                    text: "[HAND] ring tip x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "ringTipY",
-                    blockType: "reporter",
-                    text: "[HAND] ring tip y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "ringTipZ",
-                    blockType: "reporter",
-                    text: "[HAND] ring tip z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // PINKY BOTTOM
-
-                {
-                    opcode: "pinkyBottomX",
-                    blockType: "reporter",
-                    text: "[HAND] pinky bottom joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "pinkyBottomY",
-                    blockType: "reporter",
-                    text: "[HAND] pinky bottom joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "pinkyBottomZ",
-                    blockType: "reporter",
-                    text: "[HAND] pinky bottom joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // PINKY MIDDLE
-
-                {
-                    opcode: "pinkyMiddleX",
-                    blockType: "reporter",
-                    text: "[HAND] pinky middle joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "pinkyMiddleY",
-                    blockType: "reporter",
-                    text: "[HAND] pinky middle joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "pinkyMiddleZ",
-                    blockType: "reporter",
-                    text: "[HAND] pinky middle joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // PINKY TOP
-
-                {
-                    opcode: "pinkyTopX",
-                    blockType: "reporter",
-                    text: "[HAND] pinky top joint x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "pinkyTopY",
-                    blockType: "reporter",
-                    text: "[HAND] pinky top joint y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "pinkyTopZ",
-                    blockType: "reporter",
-                    text: "[HAND] pinky top joint z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                // PINKY TIP
-
-                {
-                    opcode: "pinkyTipX",
-                    blockType: "reporter",
-                    text: "[HAND] pinky tip x",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "pinkyTipY",
-                    blockType: "reporter",
-                    text: "[HAND] pinky tip y",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                },
-
-                {
-                    opcode: "pinkyTipZ",
-                    blockType: "reporter",
-                    text: "[HAND] pinky tip z",
-                    arguments: {
-                        HAND: {
-                            type: "string",
-                            menu: "hands"
-                        }
-                    }
-                }
-            ],
-
-            menus: {
-                hands: {
-                    acceptReporters: true,
-
-                    items: [
-                        {
-                            text: "left",
-                            value: "Left"
-                        },
-
-                        {
-                            text: "right",
-                            value: "Right"
-                        }
-                    ]
-                }
-            }
-        };
-    }
-
-    // CAMERA
-
-    async startHandTracking() {
-        await this.openCamera();
-    }
-
-    stopHandTracking() {
-        this.stopCamera();
-    }
-
+    // =========================================================
     // WRIST
+    // =========================================================
 
     wristX(args) {
         return this.getX(args.HAND, 0);
@@ -1219,7 +481,9 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 0);
     }
 
+    // =========================================================
     // THUMB
+    // =========================================================
 
     thumbBottomX(args) {
         return this.getX(args.HAND, 1);
@@ -1269,7 +533,9 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 4);
     }
 
+    // =========================================================
     // INDEX
+    // =========================================================
 
     indexBottomX(args) {
         return this.getX(args.HAND, 5);
@@ -1319,7 +585,9 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 8);
     }
 
+    // =========================================================
     // MIDDLE
+    // =========================================================
 
     middleBottomX(args) {
         return this.getX(args.HAND, 9);
@@ -1369,7 +637,9 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 12);
     }
 
+    // =========================================================
     // RING
+    // =========================================================
 
     ringBottomX(args) {
         return this.getX(args.HAND, 13);
@@ -1419,7 +689,9 @@ class HandTrackingExtension {
         return this.getZ(args.HAND, 16);
     }
 
+    // =========================================================
     // PINKY
+    // =========================================================
 
     pinkyBottomX(args) {
         return this.getX(args.HAND, 17);
@@ -1468,15 +740,171 @@ class HandTrackingExtension {
     pinkyTipZ(args) {
         return this.getZ(args.HAND, 20);
     }
+
+    // =========================================================
+    // BLOCK GENERATION
+    // =========================================================
+
+    getInfo() {
+        const blocks = [
+            {
+                opcode: "startHandTracking",
+                blockType: "command",
+                text: "start hand tracking"
+            },
+
+            {
+                opcode: "stopHandTracking",
+                blockType: "command",
+                text: "stop hand tracking"
+            },
+
+            {
+                opcode: "cameraActive",
+                blockType: "Boolean",
+                text: "camera active?"
+            },
+
+            {
+                opcode: "getNumberOfHands",
+                blockType: "reporter",
+                text: "number of hands"
+            },
+
+            {
+                opcode: "handDetected",
+                blockType: "Boolean",
+                text: "[HAND] hand detected?",
+
+                arguments: {
+                    HAND: {
+                        type: "string",
+                        menu: "hands"
+                    }
+                }
+            }
+        ];
+
+        const landmarks = [
+            ["wrist", "Wrist", 0],
+
+            ["thumbBottom", "Thumb Bottom Joint", 1],
+            ["thumbMiddle", "Thumb Middle Joint", 2],
+            ["thumbTop", "Thumb Top Joint", 3],
+            ["thumbTip", "Thumb Tip", 4],
+
+            ["indexBottom", "Index Bottom Joint", 5],
+            ["indexMiddle", "Index Middle Joint", 6],
+            ["indexTop", "Index Top Joint", 7],
+            ["indexTip", "Index Tip", 8],
+
+            ["middleBottom", "Middle Bottom Joint", 9],
+            ["middleMiddle", "Middle Middle Joint", 10],
+            ["middleTop", "Middle Top Joint", 11],
+            ["middleTip", "Middle Tip", 12],
+
+            ["ringBottom", "Ring Bottom Joint", 13],
+            ["ringMiddle", "Ring Middle Joint", 14],
+            ["ringTop", "Ring Top Joint", 15],
+            ["ringTip", "Ring Tip", 16],
+
+            ["pinkyBottom", "Pinky Bottom Joint", 17],
+            ["pinkyMiddle", "Pinky Middle Joint", 18],
+            ["pinkyTop", "Pinky Top Joint", 19],
+            ["pinkyTip", "Pinky Tip", 20]
+        ];
+
+        for (const landmark of landmarks) {
+            const name = landmark[0];
+            const displayName = landmark[1];
+
+            blocks.push({
+                opcode: name + "X",
+                blockType: "reporter",
+                text: "[HAND] " + displayName.toLowerCase() + " x",
+
+                arguments: {
+                    HAND: {
+                        type: "string",
+                        menu: "hands"
+                    }
+                }
+            });
+
+            blocks.push({
+                opcode: name + "Y",
+                blockType: "reporter",
+                text: "[HAND] " + displayName.toLowerCase() + " y",
+
+                arguments: {
+                    HAND: {
+                        type: "string",
+                        menu: "hands"
+                    }
+                }
+            });
+
+            blocks.push({
+                opcode: name + "Z",
+                blockType: "reporter",
+                text: "[HAND] " + displayName.toLowerCase() + " z",
+
+                arguments: {
+                    HAND: {
+                        type: "string",
+                        menu: "hands"
+                    }
+                }
+            });
+        }
+
+        return {
+            id: "handtracking",
+
+            name: "Hand Tracking",
+
+            color1: "#5B5BFF",
+            color2: "#4747CC",
+            color3: "#333399",
+
+            blocks: blocks,
+
+            menus: {
+                hands: {
+                    acceptReporters: true,
+
+                    items: [
+                        {
+                            text: "left",
+                            value: "Left"
+                        },
+
+                        {
+                            text: "right",
+                            value: "Right"
+                        }
+                    ]
+                }
+            }
+        };
+    }
 }
 
+
+// =============================================================
+// UNSANDBOXED REQUIREMENT
+// =============================================================
 
 if (!Scratch.extensions.unsandboxed) {
     throw new Error(
-        "Hand Tracking must run unsandboxed."
+        "The Hand Tracking extension must run unsandboxed."
     );
 }
 
+
+// =============================================================
+// REGISTER EXTENSION
+// =============================================================
 
 Scratch.extensions.register(
     new HandTrackingExtension()
