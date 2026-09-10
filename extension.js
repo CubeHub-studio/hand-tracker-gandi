@@ -21,41 +21,42 @@ class HandTrackingExtension {
 
         this.running = false;
         this.loading = false;
+        this.mediaPipeLoaded = false;
 
         this.results = null;
 
-        this.frameRequest = null;
-        this.lastProcessedTime = -1;
+        // Prevent MediaPipe frame buildup
+        this.processing = false;
 
-        this.mediaPipeLoaded = false;
+        // Process at roughly 15 FPS instead of 60+ FPS
+        this.lastProcessTime = 0;
+        this.processInterval = 66;
+
+        this.animationFrame = null;
     }
 
     // =========================================================
-    // LOAD MEDIAPIPE USING SCRIPT TAGS
+    // LOAD SCRIPT
     // =========================================================
 
     loadScript(url) {
         return new Promise((resolve, reject) => {
             const existing = document.querySelector(
-                `script[src="${url}"]`
+                'script[data-hand-tracking-mediapipe="true"]'
             );
 
             if (existing) {
-                if (existing.dataset.loaded === "true") {
+                if (window.Hands) {
                     resolve();
                     return;
                 }
 
-                existing.addEventListener("load", () => {
-                    resolve();
+                existing.addEventListener("load", resolve, {
+                    once: true
                 });
 
-                existing.addEventListener("error", () => {
-                    reject(
-                        new Error(
-                            "Failed to load MediaPipe script: " + url
-                        )
-                    );
+                existing.addEventListener("error", reject, {
+                    once: true
                 });
 
                 return;
@@ -67,15 +68,16 @@ class HandTrackingExtension {
             script.async = true;
             script.crossOrigin = "anonymous";
 
+            script.dataset.handTrackingMediapipe = "true";
+
             script.onload = () => {
-                script.dataset.loaded = "true";
                 resolve();
             };
 
             script.onerror = () => {
                 reject(
                     new Error(
-                        "Failed to load MediaPipe script: " + url
+                        "Could not load MediaPipe Hands."
                     )
                 );
             };
@@ -84,8 +86,12 @@ class HandTrackingExtension {
         });
     }
 
+    // =========================================================
+    // MEDIAPIPE
+    // =========================================================
+
     async loadMediaPipe() {
-        if (this.mediaPipeLoaded && window.Hands) {
+        if (this.mediaPipeLoaded && this.hands) {
             return;
         }
 
@@ -96,7 +102,7 @@ class HandTrackingExtension {
                 );
             }
 
-            if (this.mediaPipeLoaded && window.Hands) {
+            if (this.mediaPipeLoaded && this.hands) {
                 return;
             }
         }
@@ -104,19 +110,13 @@ class HandTrackingExtension {
         this.loading = true;
 
         try {
-            /*
-             * Classic MediaPipe Hands browser library.
-             *
-             * No ES module.
-             * No dynamic import().
-             */
             await this.loadScript(
                 "https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"
             );
 
             if (!window.Hands) {
                 throw new Error(
-                    "MediaPipe Hands loaded, but the Hands API was not found."
+                    "MediaPipe Hands did not create window.Hands."
                 );
             }
 
@@ -132,24 +132,31 @@ class HandTrackingExtension {
             this.hands.setOptions({
                 maxNumHands: 2,
 
-                modelComplexity: 1,
+                modelComplexity: 0,
 
-                minDetectionConfidence: 0.5,
+                minDetectionConfidence: 0.55,
 
-                minTrackingConfidence: 0.5
+                minTrackingConfidence: 0.55
             });
 
             this.hands.onResults(results => {
+                // Replace the old result instead of accumulating results
                 this.results = results;
+
+                // MediaPipe is ready for another frame
+                this.processing = false;
             });
 
             this.mediaPipeLoaded = true;
 
         } catch (error) {
             console.error(
-                "Hand Tracking: MediaPipe failed to load.",
+                "MediaPipe initialization failed:",
                 error
             );
+
+            this.hands = null;
+            this.mediaPipeLoaded = false;
 
             throw error;
 
@@ -159,7 +166,7 @@ class HandTrackingExtension {
     }
 
     // =========================================================
-    // CAMERA
+    // START
     // =========================================================
 
     async startHandTracking() {
@@ -168,155 +175,204 @@ class HandTrackingExtension {
         }
 
         try {
-            /*
-             * Ask for the camera first.
-             */
-            if (!navigator.mediaDevices) {
+            if (
+                !navigator.mediaDevices ||
+                !navigator.mediaDevices.getUserMedia
+            ) {
                 throw new Error(
-                    "navigator.mediaDevices is unavailable."
+                    "Camera access is not supported by this browser."
                 );
             }
 
-            if (!navigator.mediaDevices.getUserMedia) {
-                throw new Error(
-                    "getUserMedia is unavailable in this browser."
-                );
-            }
+            // -------------------------------------------------
+            // CAMERA
+            // -------------------------------------------------
 
-            if (!this.stream) {
-                this.stream =
-                    await navigator.mediaDevices.getUserMedia({
-                        video: {
-                            width: {
-                                ideal: 640
-                            },
-
-                            height: {
-                                ideal: 480
-                            },
-
-                            facingMode: "user"
+            this.stream =
+                await navigator.mediaDevices.getUserMedia({
+                    video: {
+                        width: {
+                            ideal: 320,
+                            max: 320
                         },
 
-                        audio: false
-                    });
+                        height: {
+                            ideal: 240,
+                            max: 240
+                        },
 
-                this.video.srcObject = this.stream;
+                        frameRate: {
+                            ideal: 15,
+                            max: 20
+                        },
 
-                await this.video.play();
-            }
+                        facingMode: "user"
+                    },
 
-            /*
-             * Load MediaPipe after the user starts tracking.
-             */
+                    audio: false
+                });
+
+            this.video.srcObject = this.stream;
+
+            await this.video.play();
+
+            // -------------------------------------------------
+            // MEDIAPIPE
+            // -------------------------------------------------
+
             await this.loadMediaPipe();
 
             this.running = true;
 
-            this.lastProcessedTime = -1;
+            this.processing = false;
+            this.lastProcessTime = 0;
 
-            this.processFrame();
+            this.processLoop();
 
         } catch (error) {
             console.error(
-                "Hand Tracking could not start:",
+                "Could not start hand tracking:",
                 error
             );
 
-            this.running = false;
-
-            if (this.stream) {
-                for (const track of this.stream.getTracks()) {
-                    track.stop();
-                }
-            }
-
-            this.stream = null;
-
-            this.video.srcObject = null;
+            this.stopHandTracking();
 
             throw error;
         }
     }
 
+    // =========================================================
+    // STOP
+    // =========================================================
+
     stopHandTracking() {
         this.running = false;
 
-        if (this.frameRequest !== null) {
+        this.processing = false;
+
+        if (this.animationFrame !== null) {
             cancelAnimationFrame(
-                this.frameRequest
+                this.animationFrame
             );
 
-            this.frameRequest = null;
+            this.animationFrame = null;
         }
 
         if (this.stream) {
-            for (const track of this.stream.getTracks()) {
+            const tracks =
+                this.stream.getTracks();
+
+            for (const track of tracks) {
                 track.stop();
             }
         }
 
         this.stream = null;
 
+        this.video.pause();
         this.video.srcObject = null;
 
         this.results = null;
 
-        this.lastProcessedTime = -1;
+        this.lastProcessTime = 0;
     }
 
     // =========================================================
-    // FRAME PROCESSING
+    // FRAME LOOP
     // =========================================================
 
-    processFrame() {
+    processLoop() {
         if (!this.running) {
             return;
         }
 
+        const now = performance.now();
+
+        /*
+         * Don't process more than ~15 frames per second.
+         */
         if (
-            this.hands &&
-            this.video.readyState >= 2 &&
-            this.video.videoWidth > 0 &&
-            this.video.videoHeight > 0
+            now - this.lastProcessTime >=
+            this.processInterval
         ) {
-            const currentTime =
-                this.video.currentTime;
+            this.lastProcessTime = now;
 
-            /*
-             * Don't process the same video frame twice.
-             */
-            if (
-                currentTime !==
-                this.lastProcessedTime
-            ) {
-                this.lastProcessedTime =
-                    currentTime;
-
-                this.hands.send({
-                    image: this.video
-                }).catch(error => {
-                    console.error(
-                        "MediaPipe frame error:",
-                        error
-                    );
-                });
-            }
+            this.processCurrentFrame();
         }
 
-        this.frameRequest =
+        this.animationFrame =
             requestAnimationFrame(
-                () => this.processFrame()
+                () => this.processLoop()
             );
     }
 
     // =========================================================
-    // GENERAL HAND INFORMATION
+    // PROCESS ONE FRAME
+    // =========================================================
+
+    async processCurrentFrame() {
+        /*
+         * CRITICAL:
+         *
+         * Never call MediaPipe again while the previous
+         * frame is still being processed.
+         */
+        if (this.processing) {
+            return;
+        }
+
+        if (!this.hands) {
+            return;
+        }
+
+        if (!this.running) {
+            return;
+        }
+
+        if (this.video.readyState < 2) {
+            return;
+        }
+
+        if (
+            this.video.videoWidth <= 0 ||
+            this.video.videoHeight <= 0
+        ) {
+            return;
+        }
+
+        this.processing = true;
+
+        try {
+            await this.hands.send({
+                image: this.video
+            });
+
+        } catch (error) {
+            console.error(
+                "MediaPipe processing error:",
+                error
+            );
+
+            /*
+             * IMPORTANT:
+             * Make sure an error doesn't permanently
+             * lock the processing state.
+             */
+            this.processing = false;
+        }
+    }
+
+    // =========================================================
+    // CAMERA STATUS
     // =========================================================
 
     cameraActive() {
         return this.running;
     }
+
+    // =========================================================
+    // NUMBER OF HANDS
+    // =========================================================
 
     getNumberOfHands() {
         if (!this.results) {
@@ -329,6 +385,10 @@ class HandTrackingExtension {
 
         return this.results.multiHandLandmarks.length;
     }
+
+    // =========================================================
+    // FIND LEFT / RIGHT HAND
+    // =========================================================
 
     getHandIndex(hand) {
         if (!this.results) {
@@ -347,27 +407,31 @@ class HandTrackingExtension {
             i < this.results.multiHandedness.length;
             i++
         ) {
-            const detected =
+            const handedness =
                 this.results.multiHandedness[i];
 
-            if (!detected) {
+            if (!handedness) {
                 continue;
             }
 
             let label = "";
 
-            if (detected.label) {
+            if (handedness.label) {
                 label =
                     String(
-                        detected.label
+                        handedness.label
                     ).toLowerCase();
-            } else if (
-                detected.classification &&
-                detected.classification.length > 0
+            }
+
+            if (
+                handedness.classification &&
+                handedness.classification.length > 0
             ) {
                 label =
                     String(
-                        detected.classification[0].label
+                        handedness
+                            .classification[0]
+                            .label
                     ).toLowerCase();
             }
 
@@ -379,6 +443,10 @@ class HandTrackingExtension {
         return -1;
     }
 
+    // =========================================================
+    // HAND DETECTED
+    // =========================================================
+
     handDetected(args) {
         return (
             this.getHandIndex(
@@ -388,7 +456,7 @@ class HandTrackingExtension {
     }
 
     // =========================================================
-    // LANDMARK ACCESS
+    // GET LANDMARK
     // =========================================================
 
     getLandmark(hand, index) {
@@ -416,12 +484,12 @@ class HandTrackingExtension {
             return null;
         }
 
-        if (!landmarks[index]) {
-            return null;
-        }
-
-        return landmarks[index];
+        return landmarks[index] || null;
     }
+
+    // =========================================================
+    // COORDINATES
+    // =========================================================
 
     getX(hand, index) {
         const landmark =
@@ -430,11 +498,9 @@ class HandTrackingExtension {
                 index
             );
 
-        if (!landmark) {
-            return 0;
-        }
-
-        return landmark.x;
+        return landmark
+            ? landmark.x
+            : 0;
     }
 
     getY(hand, index) {
@@ -444,11 +510,9 @@ class HandTrackingExtension {
                 index
             );
 
-        if (!landmark) {
-            return 0;
-        }
-
-        return landmark.y;
+        return landmark
+            ? landmark.y
+            : 0;
     }
 
     getZ(hand, index) {
@@ -458,11 +522,9 @@ class HandTrackingExtension {
                 index
             );
 
-        if (!landmark) {
-            return 0;
-        }
-
-        return landmark.z;
+        return landmark
+            ? landmark.z
+            : 0;
     }
 
     // =========================================================
@@ -742,7 +804,7 @@ class HandTrackingExtension {
     }
 
     // =========================================================
-    // BLOCK GENERATION
+    // BLOCKS
     // =========================================================
 
     getInfo() {
@@ -786,32 +848,32 @@ class HandTrackingExtension {
         ];
 
         const landmarks = [
-            ["wrist", "Wrist", 0],
+            ["wrist", "wrist", 0],
 
-            ["thumbBottom", "Thumb Bottom Joint", 1],
-            ["thumbMiddle", "Thumb Middle Joint", 2],
-            ["thumbTop", "Thumb Top Joint", 3],
-            ["thumbTip", "Thumb Tip", 4],
+            ["thumbBottom", "thumb bottom joint", 1],
+            ["thumbMiddle", "thumb middle joint", 2],
+            ["thumbTop", "thumb top joint", 3],
+            ["thumbTip", "thumb tip", 4],
 
-            ["indexBottom", "Index Bottom Joint", 5],
-            ["indexMiddle", "Index Middle Joint", 6],
-            ["indexTop", "Index Top Joint", 7],
-            ["indexTip", "Index Tip", 8],
+            ["indexBottom", "index bottom joint", 5],
+            ["indexMiddle", "index middle joint", 6],
+            ["indexTop", "index top joint", 7],
+            ["indexTip", "index tip", 8],
 
-            ["middleBottom", "Middle Bottom Joint", 9],
-            ["middleMiddle", "Middle Middle Joint", 10],
-            ["middleTop", "Middle Top Joint", 11],
-            ["middleTip", "Middle Tip", 12],
+            ["middleBottom", "middle bottom joint", 9],
+            ["middleMiddle", "middle middle joint", 10],
+            ["middleTop", "middle top joint", 11],
+            ["middleTip", "middle tip", 12],
 
-            ["ringBottom", "Ring Bottom Joint", 13],
-            ["ringMiddle", "Ring Middle Joint", 14],
-            ["ringTop", "Ring Top Joint", 15],
-            ["ringTip", "Ring Tip", 16],
+            ["ringBottom", "ring bottom joint", 13],
+            ["ringMiddle", "ring middle joint", 14],
+            ["ringTop", "ring top joint", 15],
+            ["ringTip", "ring tip", 16],
 
-            ["pinkyBottom", "Pinky Bottom Joint", 17],
-            ["pinkyMiddle", "Pinky Middle Joint", 18],
-            ["pinkyTop", "Pinky Top Joint", 19],
-            ["pinkyTip", "Pinky Tip", 20]
+            ["pinkyBottom", "pinky bottom joint", 17],
+            ["pinkyMiddle", "pinky middle joint", 18],
+            ["pinkyTop", "pinky top joint", 19],
+            ["pinkyTip", "pinky tip", 20]
         ];
 
         for (const landmark of landmarks) {
@@ -821,7 +883,11 @@ class HandTrackingExtension {
             blocks.push({
                 opcode: name + "X",
                 blockType: "reporter",
-                text: "[HAND] " + displayName.toLowerCase() + " x",
+
+                text:
+                    "[HAND] " +
+                    displayName +
+                    " x",
 
                 arguments: {
                     HAND: {
@@ -834,7 +900,11 @@ class HandTrackingExtension {
             blocks.push({
                 opcode: name + "Y",
                 blockType: "reporter",
-                text: "[HAND] " + displayName.toLowerCase() + " y",
+
+                text:
+                    "[HAND] " +
+                    displayName +
+                    " y",
 
                 arguments: {
                     HAND: {
@@ -847,7 +917,11 @@ class HandTrackingExtension {
             blocks.push({
                 opcode: name + "Z",
                 blockType: "reporter",
-                text: "[HAND] " + displayName.toLowerCase() + " z",
+
+                text:
+                    "[HAND] " +
+                    displayName +
+                    " z",
 
                 arguments: {
                     HAND: {
@@ -892,7 +966,7 @@ class HandTrackingExtension {
 
 
 // =============================================================
-// UNSANDBOXED REQUIREMENT
+// UNSANDBOXED
 // =============================================================
 
 if (!Scratch.extensions.unsandboxed) {
@@ -903,7 +977,7 @@ if (!Scratch.extensions.unsandboxed) {
 
 
 // =============================================================
-// REGISTER EXTENSION
+// REGISTER
 // =============================================================
 
 Scratch.extensions.register(
