@@ -25,33 +25,32 @@ class HandTrackingExtension {
 
         this.results = null;
 
-        // -----------------------------------------------------
+        // =====================================================
         // MEMORY SAFETY
-        // -----------------------------------------------------
+        // =====================================================
 
-        // Only ONE MediaPipe frame can be processing at once.
+        // Never process more than one MediaPipe frame at once.
         this.processing = false;
 
-        // Maximum tracking rate.
+        // Approximately 30 FPS.
         this.lastProcessTime = 0;
         this.processInterval = 33;
 
         this.animationFrame = null;
 
-        // Used to prevent stale processing after stopping.
+        // Prevent stale camera sessions.
         this.session = 0;
     }
 
     // =========================================================
-    // LOAD A NORMAL BROWSER SCRIPT
+    // LOAD MEDIAPIPE WITH A NORMAL <script> TAG
     // =========================================================
 
     loadScript(url) {
         return new Promise((resolve, reject) => {
-            const existing =
-                document.querySelector(
-                    'script[data-hand-tracking-mediapipe="true"]'
-                );
+            const existing = document.querySelector(
+                'script[data-hand-tracking-mediapipe="true"]'
+            );
 
             if (existing) {
                 if (window.Hands) {
@@ -180,32 +179,25 @@ class HandTrackingExtension {
             // =================================================
 
             this.hands.setOptions({
-                // Detect both hands.
                 maxNumHands: 2,
 
-                // Higher quality model.
                 modelComplexity: 1,
 
-                // Detection confidence.
                 minDetectionConfidence: 0.65,
 
-                // Tracking confidence.
                 minTrackingConfidence: 0.65
             });
 
             this.hands.onResults(
                 results => {
                     /*
-                     * IMPORTANT:
-                     *
-                     * Replace the old result.
-                     * Never push results into an array.
+                     * Replace the previous result.
+                     * Never accumulate results.
                      */
                     this.results = results;
 
                     /*
-                     * MediaPipe is now ready for
-                     * exactly ONE more frame.
+                     * Allow exactly one new frame.
                      */
                     this.processing = false;
                 }
@@ -225,7 +217,7 @@ class HandTrackingExtension {
     }
 
     // =========================================================
-    // START TRACKING
+    // START HAND TRACKING
     // =========================================================
 
     async startHandTracking() {
@@ -275,8 +267,10 @@ class HandTrackingExtension {
                         audio: false
                     });
 
-            // If tracking was stopped while the camera
-            // permission dialog was open.
+            /*
+             * If the user stopped tracking while the
+             * camera permission dialog was open.
+             */
             if (
                 currentSession !==
                 this.session
@@ -334,7 +328,7 @@ class HandTrackingExtension {
     }
 
     // =========================================================
-    // STOP TRACKING
+    // STOP HAND TRACKING
     // =========================================================
 
     stopHandTracking() {
@@ -342,9 +336,6 @@ class HandTrackingExtension {
 
         this.running = false;
 
-        /*
-         * Cancel any scheduled animation frame.
-         */
         if (
             this.animationFrame !== null
         ) {
@@ -355,14 +346,8 @@ class HandTrackingExtension {
             this.animationFrame = null;
         }
 
-        /*
-         * Allow processing state to reset.
-         */
         this.processing = false;
 
-        /*
-         * Stop every camera track.
-         */
         if (this.stream) {
             const tracks =
                 this.stream.getTracks();
@@ -374,16 +359,10 @@ class HandTrackingExtension {
 
         this.stream = null;
 
-        /*
-         * Detach the camera.
-         */
         this.video.pause();
 
         this.video.srcObject = null;
 
-        /*
-         * Delete the old detection result.
-         */
         this.results = null;
 
         this.lastProcessTime = 0;
@@ -401,9 +380,6 @@ class HandTrackingExtension {
         const now =
             performance.now();
 
-        /*
-         * Run at approximately 30 FPS.
-         */
         if (
             now - this.lastProcessTime >=
             this.processInterval
@@ -427,11 +403,8 @@ class HandTrackingExtension {
         /*
          * MEMORY SAFETY:
          *
-         * If MediaPipe is still processing the previous
-         * frame, completely skip this frame.
-         *
-         * This prevents an enormous queue of promises
-         * and camera frames from accumulating.
+         * If MediaPipe is still processing a frame,
+         * skip this frame completely.
          */
         if (this.processing) {
             return;
@@ -457,7 +430,7 @@ class HandTrackingExtension {
         }
 
         /*
-         * Lock the processor BEFORE calling send().
+         * Lock before sending the frame.
          */
         this.processing = true;
 
@@ -473,15 +446,14 @@ class HandTrackingExtension {
             );
 
             /*
-             * Make sure an error never permanently
-             * locks the processor.
+             * Never leave the processor locked.
              */
             this.processing = false;
         }
     }
 
     // =========================================================
-    // CAMERA ACTIVE
+    // CAMERA STATUS
     // =========================================================
 
     cameraActive() {
@@ -545,9 +517,6 @@ class HandTrackingExtension {
 
             let label = "";
 
-            /*
-             * Older MediaPipe format.
-             */
             if (handedness.label) {
                 label =
                     String(
@@ -555,9 +524,6 @@ class HandTrackingExtension {
                     ).toLowerCase();
             }
 
-            /*
-             * Alternative format.
-             */
             if (
                 handedness.classification &&
                 handedness
@@ -644,7 +610,17 @@ class HandTrackingExtension {
     }
 
     // =========================================================
-    // COORDINATES
+    // X COORDINATE
+    //
+    // MediaPipe:
+    //     0.0 = left
+    //     0.5 = center
+    //     1.0 = right
+    //
+    // Gandi/Scratch:
+    //     -240 = left
+    //        0 = center
+    //      240 = right
     // =========================================================
 
     getX(hand, index) {
@@ -658,10 +634,41 @@ class HandTrackingExtension {
             return 0;
         }
 
-        return Number(
-            landmark.x
-        ) || 0;
+        const normalized =
+            Number(
+                landmark.x
+            );
+
+        if (!Number.isFinite(normalized)) {
+            return 0;
+        }
+
+        /*
+         * Convert:
+         *
+         * 0.0  -> -240
+         * 0.5  ->    0
+         * 1.0  ->  240
+         */
+        return (
+            (normalized - 0.5) *
+            480
+        );
     }
+
+    // =========================================================
+    // Y COORDINATE
+    //
+    // MediaPipe:
+    //     0.0 = top
+    //     0.5 = center
+    //     1.0 = bottom
+    //
+    // Gandi/Scratch:
+    //     180 = top
+    //       0 = center
+    //    -180 = bottom
+    // =========================================================
 
     getY(hand, index) {
         const landmark =
@@ -674,10 +681,34 @@ class HandTrackingExtension {
             return 0;
         }
 
-        return Number(
-            landmark.y
-        ) || 0;
+        const normalized =
+            Number(
+                landmark.y
+            );
+
+        if (!Number.isFinite(normalized)) {
+            return 0;
+        }
+
+        /*
+         * Invert Y because computer vision
+         * coordinates increase downward.
+         *
+         * 0.0  ->  180
+         * 0.5  ->    0
+         * 1.0  -> -180
+         */
+        return (
+            180 -
+            normalized * 360
+        );
     }
+
+    // =========================================================
+    // Z COORDINATE
+    //
+    // Z stays as MediaPipe's depth value.
+    // =========================================================
 
     getZ(hand, index) {
         const landmark =
@@ -690,9 +721,16 @@ class HandTrackingExtension {
             return 0;
         }
 
-        return Number(
-            landmark.z
-        ) || 0;
+        const z =
+            Number(
+                landmark.z
+            );
+
+        if (!Number.isFinite(z)) {
+            return 0;
+        }
+
+        return z;
     }
 
     // =========================================================
@@ -1205,92 +1243,136 @@ class HandTrackingExtension {
         ];
 
         // =====================================================
-        // EXACT 21 LANDMARK ORDER
+        // EXACT 21 LANDMARKS
         // =====================================================
 
         const landmarks = [
             ["wrist", "wrist", 0],
 
-            ["thumbBottom",
+            [
+                "thumbBottom",
                 "thumb bottom joint",
-                1],
+                1
+            ],
 
-            ["thumbMiddle",
+            [
+                "thumbMiddle",
                 "thumb middle joint",
-                2],
+                2
+            ],
 
-            ["thumbTop",
+            [
+                "thumbTop",
                 "thumb top joint",
-                3],
+                3
+            ],
 
-            ["thumbTip",
+            [
+                "thumbTip",
                 "thumb tip",
-                4],
+                4
+            ],
 
-            ["indexBottom",
+            [
+                "indexBottom",
                 "index bottom joint",
-                5],
+                5
+            ],
 
-            ["indexMiddle",
+            [
+                "indexMiddle",
                 "index middle joint",
-                6],
+                6
+            ],
 
-            ["indexTop",
+            [
+                "indexTop",
                 "index top joint",
-                7],
+                7
+            ],
 
-            ["indexTip",
+            [
+                "indexTip",
                 "index tip",
-                8],
+                8
+            ],
 
-            ["middleBottom",
+            [
+                "middleBottom",
                 "middle bottom joint",
-                9],
+                9
+            ],
 
-            ["middleMiddle",
+            [
+                "middleMiddle",
                 "middle middle joint",
-                10],
+                10
+            ],
 
-            ["middleTop",
+            [
+                "middleTop",
                 "middle top joint",
-                11],
+                11
+            ],
 
-            ["middleTip",
+            [
+                "middleTip",
                 "middle tip",
-                12],
+                12
+            ],
 
-            ["ringBottom",
+            [
+                "ringBottom",
                 "ring bottom joint",
-                13],
+                13
+            ],
 
-            ["ringMiddle",
+            [
+                "ringMiddle",
                 "ring middle joint",
-                14],
+                14
+            ],
 
-            ["ringTop",
+            [
+                "ringTop",
                 "ring top joint",
-                15],
+                15
+            ],
 
-            ["ringTip",
+            [
+                "ringTip",
                 "ring tip",
-                16],
+                16
+            ],
 
-            ["pinkyBottom",
+            [
+                "pinkyBottom",
                 "pinky bottom joint",
-                17],
+                17
+            ],
 
-            ["pinkyMiddle",
+            [
+                "pinkyMiddle",
                 "pinky middle joint",
-                18],
+                18
+            ],
 
-            ["pinkyTop",
+            [
+                "pinkyTop",
                 "pinky top joint",
-                19],
+                19
+            ],
 
-            ["pinkyTip",
+            [
+                "pinkyTip",
                 "pinky tip",
-                20]
+                20
+            ]
         ];
+
+        // =====================================================
+        // GENERATE X / Y / Z REPORTERS
+        // =====================================================
 
         for (
             const landmark of landmarks
@@ -1396,7 +1478,7 @@ class HandTrackingExtension {
 
 
 // =============================================================
-// UNSANDBOXED EXTENSION
+// REQUIRE UNSANDBOXED MODE
 // =============================================================
 
 if (!Scratch.extensions.unsandboxed) {
