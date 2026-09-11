@@ -342,48 +342,45 @@
      */
 
     function createVideo() {
-        if (video) {
-            return;
-        }
-
-        video =
-            document.createElement("video");
-
-        video.autoplay = true;
-        video.muted = true;
-        video.playsInline = true;
-
-        video.width = 320;
-        video.height = 240;
-
-        /*
-         * Keep the camera preview visible.
-         *
-         * This is intentional so the user can immediately
-         * tell whether tracking actually started.
-         */
-
-        video.style.position = "fixed";
-        video.style.right = "15px";
-        video.style.bottom = "15px";
-
-        video.style.width = "320px";
-        video.style.height = "240px";
-
-        video.style.objectFit = "cover";
-
-        video.style.zIndex = "999999";
-
-        video.style.borderRadius = "10px";
-
-        video.style.background =
-            "black";
-
-        video.style.boxShadow =
-            "0 4px 20px rgba(0,0,0,0.5)";
-
-        document.body.appendChild(video);
+    if (video) {
+        return;
     }
+
+    video =
+        document.createElement("video");
+
+    video.autoplay = true;
+    video.muted = true;
+    video.playsInline = true;
+
+    video.width = 320;
+    video.height = 240;
+
+    /*
+     * Keep the camera preview visible.
+     */
+
+    video.style.position = "fixed";
+    video.style.right = "15px";
+    video.style.bottom = "15px";
+
+    video.style.width = "320px";
+    video.style.height = "240px";
+
+    video.style.objectFit = "cover";
+
+    video.style.zIndex = "999999";
+
+    video.style.borderRadius = "10px";
+
+    video.style.background =
+        "black";
+
+    video.style.boxShadow =
+        "0 4px 20px rgba(0,0,0,0.5)";
+
+    document.body.appendChild(video);
+}
 
     /*
      * ---------------------------------------------------------
