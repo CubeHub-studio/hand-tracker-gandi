@@ -724,4 +724,138 @@
                         arguments: {
                             SIDE: {
                                 type:
-                                    Scratch.ArgumentT
+                                    Scratch.ArgumentType.STRING,
+
+                                menu:
+                                    "sides",
+
+                                defaultValue:
+                                    "Left"
+                            }
+                        }
+                    },
+
+                    {
+                        opcode: "wristZ",
+
+                        blockType:
+                            Scratch.BlockType.REPORTER,
+
+                        text:
+                            "[SIDE] wrist Z",
+
+                        arguments: {
+                            SIDE: {
+                                type:
+                                    Scratch.ArgumentType.STRING,
+
+                                menu:
+                                    "sides",
+
+                                defaultValue:
+                                    "Left"
+                            }
+                        }
+                    },
+
+                    {
+                        opcode: "wristRotation",
+
+                        blockType:
+                            Scratch.BlockType.REPORTER,
+
+                        text:
+                            "[SIDE] wrist rotation",
+
+                        arguments: {
+                            SIDE: {
+                                type:
+                                    Scratch.ArgumentType.STRING,
+
+                                menu:
+                                    "sides",
+
+                                defaultValue:
+                                    "Left"
+                            }
+                        }
+                    },
+
+                    {
+                        opcode: "trackingActive",
+
+                        blockType:
+                            Scratch.BlockType.BOOLEAN,
+
+                        text:
+                            "wrist tracking active?"
+                    }
+                ],
+
+                menus: {
+                    sides: {
+                        acceptReporters: true,
+
+                        items: [
+                            "Left",
+                            "Right"
+                        ]
+                    }
+                }
+            };
+        }
+
+        startTracking() {
+            startCamera();
+        }
+
+        stopTracking() {
+            stopCamera();
+        }
+
+        wristX(args) {
+            const side =
+                String(args.SIDE) === "Right"
+                    ? "Right"
+                    : "Left";
+
+            return wristData[side].x;
+        }
+
+        wristY(args) {
+            const side =
+                String(args.SIDE) === "Right"
+                    ? "Right"
+                    : "Left";
+
+            return wristData[side].y;
+        }
+
+        wristZ(args) {
+            const side =
+                String(args.SIDE) === "Right"
+                    ? "Right"
+                    : "Left";
+
+            return wristData[side].z;
+        }
+
+        wristRotation(args) {
+            const side =
+                String(args.SIDE) === "Right"
+                    ? "Right"
+                    : "Left";
+
+            return wristData[side].rotation;
+        }
+
+        trackingActive() {
+            return tracking;
+        }
+    }
+
+    Scratch.extensions.register(
+        new WristTracking()
+    );
+
+})(Scratch);
