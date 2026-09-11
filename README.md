@@ -5,3 +5,11 @@ Please install all 3 extensions for the best hand tracking expierence.
 2 - MediaPipe calculator.
 
 3 - palm tracker.
+
+Install links:
+
+https://cubehub-studio.github.io/hand-tracker-gandi/extension.js
+
+https://cubehub-studio.github.io/hand-tracker-gandi/extension2.js
+
+https://cubehub-studio.github.io/hand-tracker-gandi/extension3.js
