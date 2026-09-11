@@ -7,36 +7,71 @@
 
     class PalmTracking {
         constructor() {
-            // Camera
+            // ==============================
+            // CAMERA
+            // ==============================
+
             this.video = null;
             this.stream = null;
 
-            // MediaPipe
-            this.hands = null;
-            this.mediaPipeLoading = false;
-            this.mediaPipeLoaded = false;
-
-            // State
-            this.running = false;
-            this.detected = false;
-            this.processing = false;
-
-            // Gandi coordinates
-            this._palmX = 0;
-            this._palmY = 0;
-            this._palmZ = 0;
-
-            // Processing control
-            this.lastFrameTime = 0;
-            this.frameInterval = 1000 / 24;
-
-            // Low resolution = much less CPU/RAM pressure
             this.width = 320;
             this.height = 240;
 
-            // Prevent excessive processing
-            this.maxProcessingTime = 100;
+            // ==============================
+            // MEDIAPIPE
+            // ==============================
+
+            this.hands = null;
+            this.mediaPipeLoaded = false;
+            this.mediaPipeLoading = false;
+
+            // ==============================
+            // TRACKING STATE
+            // ==============================
+
+            this.running = false;
+            this.processing = false;
+            this.detected = false;
+
+            // ==============================
+            // GANDI COORDINATES
+            // ==============================
+
+            this._palmX = 0;
+            this._palmY = 0;
+
+            // Palm closeness:
+            //
+            // 0   = far
+            // 100 = close
+            //
+            this._palmZ = 0;
+
+            // ==============================
+            // Z SMOOTHING
+            // ==============================
+
+            this.zInitialized = false;
+
+            this.smoothedZ = 0;
+
+            // Lower = smoother but slower.
+            // Higher = faster but more jitter.
+            this.zSmoothing = 0.15;
+
+            // ==============================
+            // FRAME RATE
+            // ==============================
+
+            this.fps = 24;
+            this.frameInterval = 1000 / this.fps;
+
+            this.lastFrameTime = 0;
         }
+
+        // ==========================================
+        // GANDI BLOCKS
+        // ==========================================
 
         getInfo() {
             return {
@@ -87,6 +122,10 @@
             };
         }
 
+        // ==========================================
+        // LOAD JAVASCRIPT
+        // ==========================================
+
         loadScript(url) {
             return new Promise((resolve, reject) => {
                 const script = document.createElement("script");
@@ -98,14 +137,20 @@
                 };
 
                 script.onerror = () => {
-                    reject(new Error(
-                        "Failed to load MediaPipe: " + url
-                    ));
+                    reject(
+                        new Error(
+                            "Failed to load MediaPipe: " + url
+                        )
+                    );
                 };
 
                 document.head.appendChild(script);
             });
         }
+
+        // ==========================================
+        // LOAD MEDIAPIPE
+        // ==========================================
 
         async loadMediaPipe() {
             if (this.mediaPipeLoaded) {
@@ -144,6 +189,7 @@
                 this.hands.setOptions({
                     maxNumHands: 1,
 
+                    // Lower processing load.
                     modelComplexity: 0,
 
                     minDetectionConfidence: 0.65,
@@ -151,20 +197,26 @@
                 });
 
                 this.hands.onResults(
-                    results => this.processResults(results)
+                    results => {
+                        this.processResults(results);
+                    }
                 );
 
                 this.mediaPipeLoaded = true;
 
-            } catch (e) {
+            } catch (error) {
                 console.error(
                     "Palm Tracking MediaPipe error:",
-                    e
+                    error
                 );
             }
 
             this.mediaPipeLoading = false;
         }
+
+        // ==========================================
+        // START TRACKING
+        // ==========================================
 
         async start() {
             if (this.running) {
@@ -203,8 +255,8 @@
                             },
 
                             frameRate: {
-                                ideal: 24,
-                                max: 24
+                                ideal: this.fps,
+                                max: this.fps
                             }
                         },
 
@@ -222,36 +274,51 @@
                 this._palmY = 0;
                 this._palmZ = 0;
 
+                // Reset Z smoothing.
+                this.zInitialized = false;
+                this.smoothedZ = 0;
+
                 this.lastFrameTime = performance.now();
 
                 this.frameLoop();
 
-            } catch (e) {
+            } catch (error) {
                 console.error(
                     "Palm Tracking camera error:",
-                    e
+                    error
                 );
 
                 this.cleanupCamera();
             }
         }
 
+        // ==========================================
+        // STOP TRACKING
+        // ==========================================
+
         stop() {
             this.running = false;
-            this.detected = false;
             this.processing = false;
+            this.detected = false;
 
             this.cleanupCamera();
 
-            // Keep reporter values as numbers.
             this._palmX = 0;
             this._palmY = 0;
             this._palmZ = 0;
+
+            this.zInitialized = false;
+            this.smoothedZ = 0;
         }
+
+        // ==========================================
+        // CLEAN UP CAMERA
+        // ==========================================
 
         cleanupCamera() {
             if (this.stream) {
-                const tracks = this.stream.getTracks();
+                const tracks =
+                    this.stream.getTracks();
 
                 for (let i = 0; i < tracks.length; i++) {
                     try {
@@ -279,6 +346,10 @@
             }
         }
 
+        // ==========================================
+        // FRAME LOOP
+        // ==========================================
+
         frameLoop() {
             if (!this.running) {
                 return;
@@ -290,34 +361,37 @@
                 !this.processing &&
                 this.video &&
                 this.video.readyState >= 2 &&
-                now - this.lastFrameTime >= this.frameInterval
+                now - this.lastFrameTime >=
+                    this.frameInterval
             ) {
                 this.lastFrameTime = now;
 
                 this.processing = true;
 
-                // IMPORTANT:
-                // Do not await MediaPipe from the project thread.
                 Promise.resolve(
                     this.hands.send({
                         image: this.video
                     })
                 )
-                .catch(error => {
-                    console.error(
-                        "MediaPipe frame error:",
-                        error
-                    );
-                })
-                .finally(() => {
-                    this.processing = false;
-                });
+                    .catch(error => {
+                        console.error(
+                            "MediaPipe frame error:",
+                            error
+                        );
+                    })
+                    .finally(() => {
+                        this.processing = false;
+                    });
             }
 
             setTimeout(() => {
                 this.frameLoop();
             }, 4);
         }
+
+        // ==========================================
+        // PROCESS MEDIAPIPE RESULTS
+        // ==========================================
 
         processResults(results) {
             if (!this.running) {
@@ -341,119 +415,183 @@
                 return;
             }
 
-            /*
-             * Palm center:
-             *
-             * 0  = wrist
-             * 5  = index MCP
-             * 9  = middle MCP
-             * 13 = ring MCP
-             * 17 = pinky MCP
-             */
+            // ======================================
+            // PALM LANDMARKS
+            // ======================================
 
-            const p0 = hand[0];
-            const p5 = hand[5];
-            const p9 = hand[9];
-            const p13 = hand[13];
-            const p17 = hand[17];
+            const wrist = hand[0];
+            const indexMCP = hand[5];
+            const middleMCP = hand[9];
+            const ringMCP = hand[13];
+            const pinkyMCP = hand[17];
+
+            // ======================================
+            // PALM CENTER
+            // ======================================
 
             const x =
                 (
-                    p0.x +
-                    p5.x +
-                    p9.x +
-                    p13.x +
-                    p17.x
+                    wrist.x +
+                    indexMCP.x +
+                    middleMCP.x +
+                    ringMCP.x +
+                    pinkyMCP.x
                 ) / 5;
 
             const y =
                 (
-                    p0.y +
-                    p5.y +
-                    p9.y +
-                    p13.y +
-                    p17.y
+                    wrist.y +
+                    indexMCP.y +
+                    middleMCP.y +
+                    ringMCP.y +
+                    pinkyMCP.y
                 ) / 5;
 
             const z =
                 (
-                    p0.z +
-                    p5.z +
-                    p9.z +
-                    p13.z +
-                    p17.z
+                    wrist.z +
+                    indexMCP.z +
+                    middleMCP.z +
+                    ringMCP.z +
+                    pinkyMCP.z
                 ) / 5;
 
+            // ======================================
+            // GANDI X
+            // ======================================
+
+            let gandiX =
+                (x * 480) - 240;
+
+            // ======================================
+            // GANDI Y
+            // ======================================
+
+            let gandiY =
+                180 - (y * 360);
+
+            // Clamp X.
+
+            if (gandiX < -240) {
+                gandiX = -240;
+            }
+
+            if (gandiX > 240) {
+                gandiX = 240;
+            }
+
+            // Clamp Y.
+
+            if (gandiY < -180) {
+                gandiY = -180;
+            }
+
+            if (gandiY > 180) {
+                gandiY = 180;
+            }
+
+            // ======================================
+            // PALM CLOSENESS
+            // ======================================
+
             /*
-             * MediaPipe X:
+             * MediaPipe Z is normally:
              *
-             * 0 = left
-             * 1 = right
+             *   more negative = closer
+             *   more positive = farther
              *
-             * Gandi X:
+             * It is relative depth rather than
+             * real-world centimeters.
              *
-             * -240 = left
-             *  240 = right
+             * Typical hand Z values are roughly
+             * around -0.1 to +0.1, although the
+             * exact range varies.
+             *
+             * Convert that into a closeness value.
              */
 
-            let gx = (x * 480) - 240;
+            let closeness =
+                50 - (z * 500);
+
+            // ======================================
+            // CLAMP TO 0-100
+            // ======================================
+
+            if (closeness < 0) {
+                closeness = 0;
+            }
+
+            if (closeness > 100) {
+                closeness = 100;
+            }
+
+            // ======================================
+            // SMOOTH Z
+            // ======================================
+
+            if (!this.zInitialized) {
+                this.smoothedZ = closeness;
+                this.zInitialized = true;
+            } else {
+                this.smoothedZ =
+                    this.smoothedZ +
+                    (
+                        closeness -
+                        this.smoothedZ
+                    ) *
+                    this.zSmoothing;
+            }
+
+            // ======================================
+            // ROUND Z
+            // ======================================
+
+            const finalZ =
+                Math.round(
+                    this.smoothedZ * 10
+                ) / 10;
+
+            // ======================================
+            // UPDATE STATE
+            // ======================================
 
             /*
-             * MediaPipe Y:
+             * These are ONLY primitive numbers.
              *
-             * 0 = top
-             * 1 = bottom
-             *
-             * Gandi Y:
-             *
-             * 180 = top
-             * -180 = bottom
+             * Gandi reporters simply return them.
              */
 
-            let gy = 180 - (y * 360);
-
-            // Clamp values.
-
-            if (gx < -240) gx = -240;
-            if (gx > 240) gx = 240;
-
-            if (gy < -180) gy = -180;
-            if (gy > 180) gy = 180;
-
-            /*
-             * ONLY assign primitive numbers.
-             *
-             * The Gandi reporter blocks never perform
-             * calculations or MediaPipe operations.
-             */
-
-            this._palmX = Number(gx);
-            this._palmY = Number(gy);
-            this._palmZ = Number(z);
+            this._palmX = Number(gandiX);
+            this._palmY = Number(gandiY);
+            this._palmZ = Number(finalZ);
 
             this.detected = true;
         }
 
+        // ==========================================
+        // REPORTERS
+        // ==========================================
+
         detected() {
-            // Extremely cheap reporter.
             return this.detected === true;
         }
 
         getX() {
-            // Extremely cheap reporter.
             return this._palmX;
         }
 
         getY() {
-            // Extremely cheap reporter.
             return this._palmY;
         }
 
         getZ() {
-            // Extremely cheap reporter.
             return this._palmZ;
         }
     }
+
+    // ==============================================
+    // REGISTER EXTENSION
+    // ==============================================
 
     Scratch.extensions.register(
         new PalmTracking()
