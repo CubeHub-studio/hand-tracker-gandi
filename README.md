@@ -2,7 +2,7 @@ Please install all 3 extensions for the best hand tracking expierence.
 
 1 - main hand tracking, tracks fingers and wrist.
 
-2 - MediaPipe calculator. ( needed for Z coords )
+2 - MediaPipe calculator. ( needed for Z coords hand tracker, not palm tracker. )
 
 3 - palm tracker.
 
