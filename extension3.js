@@ -24,54 +24,61 @@
             // ==========================================
 
             this.hands = null;
-            this.loadingMediaPipe = false;
             this.mediaPipeReady = false;
+            this.loadingMediaPipe = false;
 
             // ==========================================
-            // TRACKING STATE
+            // TRACKING
             // ==========================================
 
             this.running = false;
             this.processing = false;
-
-            // IMPORTANT:
-            // Do NOT call this "detected".
-            // The reporter is also named detected().
-            this._handDetected = false;
+            this.loopActive = false;
 
             // ==========================================
-            // OUTPUT VALUES
+            // LEFT HAND
             // ==========================================
 
-            this._palmX = 0;
-            this._palmY = 0;
-            this._palmZ = 0;
+            this.leftDetected = false;
+
+            this.leftX = 0;
+            this.leftY = 0;
+            this.leftZ = 0;
+
+            // ==========================================
+            // RIGHT HAND
+            // ==========================================
+
+            this.rightDetected = false;
+
+            this.rightX = 0;
+            this.rightY = 0;
+            this.rightZ = 0;
 
             // ==========================================
             // Z SMOOTHING
             // ==========================================
 
-            this._zInitialized = false;
-            this._smoothZ = 0;
+            this.leftZInitialized = false;
+            this.rightZInitialized = false;
 
-            // 0.15 = smooth and responsive
+            this.leftSmoothZ = 0;
+            this.rightSmoothZ = 0;
+
             this.zSmoothing = 0.15;
 
             // ==========================================
-            // FRAME LIMIT
+            // FRAME RATE
             // ==========================================
 
             this.fps = 20;
             this.frameInterval = 1000 / this.fps;
 
             this.lastFrameTime = 0;
-
-            // Prevent multiple frame loops.
-            this.loopActive = false;
         }
 
         // ==========================================
-        // BLOCK INFORMATION
+        // BLOCK INFO
         // ==========================================
 
         getInfo() {
@@ -97,40 +104,54 @@
                     },
 
                     {
-                        opcode: "handDetected",
+                        opcode: "leftDetected",
                         blockType: Scratch.BlockType.BOOLEAN,
-                        text: "palm detected?"
+                        text: "left palm detected?"
+                    },
+
+                    {
+                        opcode: "rightDetected",
+                        blockType: Scratch.BlockType.BOOLEAN,
+                        text: "right palm detected?"
                     },
 
                     {
                         opcode: "palmX",
                         blockType: Scratch.BlockType.REPORTER,
-                        text: "palm x"
+                        text: "palm x of [HAND]"
                     },
 
                     {
                         opcode: "palmY",
                         blockType: Scratch.BlockType.REPORTER,
-                        text: "palm y"
+                        text: "palm y of [HAND]"
                     },
 
                     {
                         opcode: "palmZ",
                         blockType: Scratch.BlockType.REPORTER,
-                        text: "palm z"
+                        text: "palm z of [HAND]"
                     }
-                ]
+                ],
+
+                menus: {
+                    HAND: {
+                        acceptReporters: false,
+                        items: [
+                            "Left",
+                            "Right"
+                        ]
+                    }
+                }
             };
         }
 
         // ==========================================
-        // LOAD EXTERNAL SCRIPT
+        // LOAD SCRIPT
         // ==========================================
 
         loadScript(url) {
             return new Promise((resolve, reject) => {
-                // Don't load the same script twice.
-
                 const scripts =
                     document.getElementsByTagName("script");
 
@@ -209,9 +230,10 @@
                 });
 
                 this.hands.setOptions({
-                    maxNumHands: 1,
+                    // TWO HANDS
+                    maxNumHands: 2,
 
-                    // Lightweight model.
+                    // Lightweight model
                     modelComplexity: 0,
 
                     minDetectionConfidence: 0.7,
@@ -246,7 +268,6 @@
         // ==========================================
 
         async startTracking() {
-            // Already running.
             if (this.running) {
                 return;
             }
@@ -255,18 +276,10 @@
                 await this.loadMediaPipe();
 
             if (!loaded) {
-                console.error(
-                    "[Palm Tracking] MediaPipe is not ready."
-                );
-
                 return;
             }
 
             try {
-                // --------------------------------------
-                // CREATE VIDEO
-                // --------------------------------------
-
                 this.video =
                     document.createElement("video");
 
@@ -280,14 +293,11 @@
                 this.video.height =
                     this.cameraHeight;
 
-                // Don't display the camera.
                 this.video.style.display = "none";
 
-                document.body.appendChild(this.video);
-
-                // --------------------------------------
-                // CAMERA
-                // --------------------------------------
+                document.body.appendChild(
+                    this.video
+                );
 
                 this.stream =
                     await navigator.mediaDevices
@@ -312,38 +322,35 @@
                             audio: false
                         });
 
-                // --------------------------------------
-                // CONNECT VIDEO
-                // --------------------------------------
-
                 this.video.srcObject =
                     this.stream;
 
                 await this.video.play();
 
-                // --------------------------------------
-                // RESET STATE
-                // --------------------------------------
+                // Reset hands
 
-                this._handDetected = false;
+                this.leftDetected = false;
+                this.rightDetected = false;
 
-                this._palmX = 0;
-                this._palmY = 0;
-                this._palmZ = 0;
+                this.leftX = 0;
+                this.leftY = 0;
+                this.leftZ = 0;
 
-                this._zInitialized = false;
-                this._smoothZ = 0;
+                this.rightX = 0;
+                this.rightY = 0;
+                this.rightZ = 0;
+
+                this.leftZInitialized = false;
+                this.rightZInitialized = false;
+
+                this.leftSmoothZ = 0;
+                this.rightSmoothZ = 0;
 
                 this.processing = false;
-
                 this.running = true;
 
                 this.lastFrameTime =
                     performance.now();
-
-                // --------------------------------------
-                // START ONLY ONE LOOP
-                // --------------------------------------
 
                 if (!this.loopActive) {
                     this.loopActive = true;
@@ -366,14 +373,12 @@
 
         stopTracking() {
             this.running = false;
-
-            this._handDetected = false;
-
             this.processing = false;
 
-            // --------------------------------------
-            // STOP CAMERA
-            // --------------------------------------
+            this.leftDetected = false;
+            this.rightDetected = false;
+
+            // Stop camera
 
             if (this.stream) {
                 const tracks =
@@ -382,17 +387,13 @@
                 for (let i = 0; i < tracks.length; i++) {
                     try {
                         tracks[i].stop();
-                    } catch (e) {
-                        // Ignore camera cleanup errors.
-                    }
+                    } catch (e) {}
                 }
 
                 this.stream = null;
             }
 
-            // --------------------------------------
-            // REMOVE VIDEO
-            // --------------------------------------
+            // Remove video
 
             if (this.video) {
                 try {
@@ -410,16 +411,21 @@
                 this.video = null;
             }
 
-            // --------------------------------------
-            // RESET VALUES
-            // --------------------------------------
+            // Reset values
 
-            this._palmX = 0;
-            this._palmY = 0;
-            this._palmZ = 0;
+            this.leftX = 0;
+            this.leftY = 0;
+            this.leftZ = 0;
 
-            this._zInitialized = false;
-            this._smoothZ = 0;
+            this.rightX = 0;
+            this.rightY = 0;
+            this.rightZ = 0;
+
+            this.leftZInitialized = false;
+            this.rightZInitialized = false;
+
+            this.leftSmoothZ = 0;
+            this.rightSmoothZ = 0;
         }
 
         // ==========================================
@@ -427,9 +433,6 @@
         // ==========================================
 
         frameLoop() {
-            // The loop itself stays alive but does
-            // absolutely nothing when tracking stops.
-
             if (!this.loopActive) {
                 return;
             }
@@ -442,24 +445,14 @@
                 !this.processing &&
                 this.video &&
                 this.video.readyState >= 2 &&
-                (
-                    now - this.lastFrameTime >=
+                now - this.lastFrameTime >=
                     this.frameInterval
-                )
             ) {
                 this.lastFrameTime = now;
 
                 this.processing = true;
 
-                /*
-                 * IMPORTANT:
-                 *
-                 * MediaPipe processing is NOT awaited.
-                 * The Gandi VM is never blocked waiting
-                 * for a camera frame.
-                 */
-
-                let promise;
+                let promise = null;
 
                 try {
                     promise =
@@ -470,11 +463,9 @@
                     this.processing = false;
 
                     console.error(
-                        "[Palm Tracking] MediaPipe send error:",
+                        "[Palm Tracking] MediaPipe error:",
                         error
                     );
-
-                    promise = null;
                 }
 
                 if (
@@ -489,27 +480,23 @@
                             this.processing = false;
 
                             console.error(
-                                "[Palm Tracking] MediaPipe error:",
+                                "[Palm Tracking] Frame error:",
                                 error
                             );
                         }
                     );
-                } else {
+                } else if (promise !== null) {
                     this.processing = false;
                 }
             }
 
-            // Don't use requestAnimationFrame for
-            // every MediaPipe cycle.
-            //
-            // This gives the browser breathing room.
             setTimeout(() => {
                 this.frameLoop();
             }, 10);
         }
 
         // ==========================================
-        // MEDIAPIPE RESULTS
+        // PROCESS RESULTS
         // ==========================================
 
         onResults(results) {
@@ -517,231 +504,285 @@
                 return;
             }
 
-            /*
-             * No hand.
-             */
+            // Reset detection every frame.
+
+            this.leftDetected = false;
+            this.rightDetected = false;
 
             if (
                 !results ||
                 !results.multiHandLandmarks ||
                 results.multiHandLandmarks.length === 0
             ) {
-                this._handDetected = false;
                 return;
             }
 
-            const hand =
-                results.multiHandLandmarks[0];
+            const landmarks =
+                results.multiHandLandmarks;
 
-            if (
-                !hand ||
-                hand.length < 18
+            const handedness =
+                results.multiHandedness || [];
+
+            // ======================================
+            // PROCESS BOTH HANDS
+            // ======================================
+
+            for (
+                let i = 0;
+                i < landmarks.length && i < 2;
+                i++
             ) {
-                this._handDetected = false;
-                return;
-            }
+                const hand = landmarks[i];
 
-            // ======================================
-            // LANDMARKS
-            // ======================================
+                if (!hand || hand.length < 18) {
+                    continue;
+                }
 
-            const wrist = hand[0];
-            const indexMCP = hand[5];
-            const middleMCP = hand[9];
-            const ringMCP = hand[13];
-            const pinkyMCP = hand[17];
+                // MediaPipe handedness.
 
-            // ======================================
-            // PALM CENTER
-            // ======================================
+                let label = "";
 
-            const x =
-                (
-                    wrist.x +
-                    indexMCP.x +
-                    middleMCP.x +
-                    ringMCP.x +
-                    pinkyMCP.x
-                ) / 5;
+                if (
+                    handedness[i] &&
+                    handedness[i].classification &&
+                    handedness[i].classification[0]
+                ) {
+                    label =
+                        handedness[i]
+                            .classification[0]
+                            .label;
+                }
 
-            const y =
-                (
-                    wrist.y +
-                    indexMCP.y +
-                    middleMCP.y +
-                    ringMCP.y +
-                    pinkyMCP.y
-                ) / 5;
+                // ==================================
+                // PALM CENTER
+                // ==================================
 
-            const z =
-                (
-                    wrist.z +
-                    indexMCP.z +
-                    middleMCP.z +
-                    ringMCP.z +
-                    pinkyMCP.z
-                ) / 5;
+                const wrist = hand[0];
+                const indexMCP = hand[5];
+                const middleMCP = hand[9];
+                const ringMCP = hand[13];
+                const pinkyMCP = hand[17];
 
-            // ======================================
-            // X → GANDI
-            // ======================================
-
-            let gx =
-                (x * 480) - 240;
-
-            // ======================================
-            // Y → GANDI
-            // ======================================
-
-            let gy =
-                180 - (y * 360);
-
-            // ======================================
-            // SAFETY CHECK X
-            // ======================================
-
-            if (!Number.isFinite(gx)) {
-                gx = 0;
-            }
-
-            if (gx < -240) {
-                gx = -240;
-            }
-
-            if (gx > 240) {
-                gx = 240;
-            }
-
-            // ======================================
-            // SAFETY CHECK Y
-            // ======================================
-
-            if (!Number.isFinite(gy)) {
-                gy = 0;
-            }
-
-            if (gy < -180) {
-                gy = -180;
-            }
-
-            if (gy > 180) {
-                gy = 180;
-            }
-
-            // ======================================
-            // Z → CLOSENESS
-            // ======================================
-
-            /*
-             * MediaPipe hand Z:
-             *
-             * More negative = closer
-             * More positive = farther
-             *
-             * Convert to:
-             *
-             * 0   = far
-             * 100 = close
-             */
-
-            let closeness =
-                50 - (z * 500);
-
-            if (!Number.isFinite(closeness)) {
-                closeness = 0;
-            }
-
-            // Clamp.
-
-            if (closeness < 0) {
-                closeness = 0;
-            }
-
-            if (closeness > 100) {
-                closeness = 100;
-            }
-
-            // ======================================
-            // SMOOTH Z
-            // ======================================
-
-            if (!this._zInitialized) {
-                this._smoothZ =
-                    closeness;
-
-                this._zInitialized = true;
-
-            } else {
-                this._smoothZ +=
+                const x =
                     (
-                        closeness -
-                        this._smoothZ
-                    ) *
-                    this.zSmoothing;
+                        wrist.x +
+                        indexMCP.x +
+                        middleMCP.x +
+                        ringMCP.x +
+                        pinkyMCP.x
+                    ) / 5;
+
+                const y =
+                    (
+                        wrist.y +
+                        indexMCP.y +
+                        middleMCP.y +
+                        ringMCP.y +
+                        pinkyMCP.y
+                    ) / 5;
+
+                const z =
+                    (
+                        wrist.z +
+                        indexMCP.z +
+                        middleMCP.z +
+                        ringMCP.z +
+                        pinkyMCP.z
+                    ) / 5;
+
+                // ==================================
+                // GANDI X
+                // ==================================
+
+                let gx =
+                    (x * 480) - 240;
+
+                // ==================================
+                // GANDI Y
+                // ==================================
+
+                let gy =
+                    180 - (y * 360);
+
+                // ==================================
+                // SAFETY
+                // ==================================
+
+                if (!Number.isFinite(gx)) {
+                    gx = 0;
+                }
+
+                if (!Number.isFinite(gy)) {
+                    gy = 0;
+                }
+
+                if (gx < -240) gx = -240;
+                if (gx > 240) gx = 240;
+
+                if (gy < -180) gy = -180;
+                if (gy > 180) gy = 180;
+
+                // ==================================
+                // CLOSENESS
+                // ==================================
+
+                let closeness =
+                    50 - (z * 500);
+
+                if (!Number.isFinite(closeness)) {
+                    closeness = 0;
+                }
+
+                if (closeness < 0) {
+                    closeness = 0;
+                }
+
+                if (closeness > 100) {
+                    closeness = 100;
+                }
+
+                // ==================================
+                // LEFT HAND
+                // ==================================
+
+                if (label === "Left") {
+                    this.leftDetected = true;
+
+                    this.leftX = gx;
+                    this.leftY = gy;
+
+                    if (!this.leftZInitialized) {
+                        this.leftSmoothZ =
+                            closeness;
+
+                        this.leftZInitialized = true;
+
+                    } else {
+                        this.leftSmoothZ +=
+                            (
+                                closeness -
+                                this.leftSmoothZ
+                            ) *
+                            this.zSmoothing;
+                    }
+
+                    this.leftZ =
+                        Math.round(
+                            this.leftSmoothZ * 10
+                        ) / 10;
+                }
+
+                // ==================================
+                // RIGHT HAND
+                // ==================================
+
+                else if (label === "Right") {
+                    this.rightDetected = true;
+
+                    this.rightX = gx;
+                    this.rightY = gy;
+
+                    if (!this.rightZInitialized) {
+                        this.rightSmoothZ =
+                            closeness;
+
+                        this.rightZInitialized = true;
+
+                    } else {
+                        this.rightSmoothZ +=
+                            (
+                                closeness -
+                                this.rightSmoothZ
+                            ) *
+                            this.zSmoothing;
+                    }
+
+                    this.rightZ =
+                        Math.round(
+                            this.rightSmoothZ * 10
+                        ) / 10;
+                }
             }
 
             // ======================================
-            // FINAL Z
+            // RESET MISSING HAND VALUES
             // ======================================
 
-            let finalZ =
-                Math.round(
-                    this._smoothZ * 10
-                ) / 10;
+            if (!this.leftDetected) {
+                this.leftX = 0;
+                this.leftY = 0;
+                this.leftZ = 0;
 
-            if (!Number.isFinite(finalZ)) {
-                finalZ = 0;
+                this.leftZInitialized = false;
             }
 
-            if (finalZ < 0) {
-                finalZ = 0;
+            if (!this.rightDetected) {
+                this.rightX = 0;
+                this.rightY = 0;
+                this.rightZ = 0;
+
+                this.rightZInitialized = false;
+            }
+        }
+
+        // ==========================================
+        // DETECTION REPORTERS
+        // ==========================================
+
+        leftDetected() {
+            return this.leftDetected === true;
+        }
+
+        rightDetected() {
+            return this.rightDetected === true;
+        }
+
+        // ==========================================
+        // X REPORTER
+        // ==========================================
+
+        palmX(args) {
+            if (args.HAND === "Left") {
+                return this.leftX;
             }
 
-            if (finalZ > 100) {
-                finalZ = 100;
+            if (args.HAND === "Right") {
+                return this.rightX;
             }
 
-            // ======================================
-            // UPDATE ONLY PRIMITIVE VALUES
-            // ======================================
-
-            this._palmX = gx;
-            this._palmY = gy;
-            this._palmZ = finalZ;
-
-            this._handDetected = true;
+            return 0;
         }
 
         // ==========================================
-        // REPORTER: PALM DETECTED
+        // Y REPORTER
         // ==========================================
 
-        handDetected() {
-            return this._handDetected;
+        palmY(args) {
+            if (args.HAND === "Left") {
+                return this.leftY;
+            }
+
+            if (args.HAND === "Right") {
+                return this.rightY;
+            }
+
+            return 0;
         }
 
         // ==========================================
-        // REPORTER: PALM X
+        // Z REPORTER
         // ==========================================
 
-        palmX() {
-            return this._palmX;
-        }
+        palmZ(args) {
+            if (args.HAND === "Left") {
+                return this.leftZ;
+            }
 
-        // ==========================================
-        // REPORTER: PALM Y
-        // ==========================================
+            if (args.HAND === "Right") {
+                return this.rightZ;
+            }
 
-        palmY() {
-            return this._palmY;
-        }
-
-        // ==========================================
-        // REPORTER: PALM Z
-        // ==========================================
-
-        palmZ() {
-            return this._palmZ;
+            return 0;
         }
     }
 
